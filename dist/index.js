@@ -10242,35 +10242,19 @@ class GithubApi {
 }
 
 ;// CONCATENATED MODULE: ./lib/reportData.js
-function score(userData) {
-    return userData.commits
-        + userData.createdIssues + userData.issueComments
-        + userData.createdDiscussions + userData.discussionComments
-        + userData.createdPrs + userData.mergedPrs + userData.prComments;
-}
-function sorter(a, b) {
-    const data1 = a[1];
-    const data2 = b[1];
-    if (data1.isOrgMember !== data2.isOrgMember) {
-        return data1.isOrgMember ? -1 : 1;
-    }
-    if (data1.isActive !== data1.isActive) {
-        return data1.isActive ? -1 : 1;
-    }
-    return score(data2) - score(data1);
-}
-class ReportData {
-    constructor(organization, analyzeOptions, report = {}) {
+class DailyReportData {
+    constructor(organization, analyzeOptions) {
         this.organization = organization;
         this.analyzeOptions = analyzeOptions;
-        this.report = report;
+        this.report = {};
+        this.orgMembers = new Set();
     }
-    getOrCreateUserData(userName) {
-        let userData = this.report[userName];
-        if (!userData) {
-            userData = {
-                isOrgMember: false,
-                isActive: false,
+    getOrCreateUserData(date, userName) {
+        if (!this.report[date]) {
+            this.report[date] = {};
+        }
+        if (!this.report[date][userName]) {
+            this.report[date][userName] = {
                 commits: 0,
                 createdIssues: 0,
                 issueComments: 0,
@@ -10280,168 +10264,47 @@ class ReportData {
                 createdDiscussions: 0,
                 discussionComments: 0
             };
-            this.report[userName] = userData;
         }
-        return userData;
+        return this.report[date][userName];
     }
     setOrgMember(userName) {
-        this.getOrCreateUserData(userName).isOrgMember = true;
+        this.orgMembers.add(userName);
     }
-    setActive(userName) {
-        this.getOrCreateUserData(userName).isActive = true;
+    addCommit(userName, date) {
+        this.getOrCreateUserData(date, userName).commits++;
     }
-    addCommit(userName) {
-        this.getOrCreateUserData(userName).commits++;
-        this.setActive(userName);
+    addCreatedIssue(userName, date) {
+        this.getOrCreateUserData(date, userName).createdIssues++;
     }
-    addCreatedIssue(userName) {
-        this.getOrCreateUserData(userName).createdIssues++;
-        this.setActive(userName);
+    addIssueComment(userName, date) {
+        this.getOrCreateUserData(date, userName).issueComments++;
     }
-    addIssueComment(userName) {
-        this.getOrCreateUserData(userName).issueComments++;
-        this.setActive(userName);
+    addCreatedPr(userName, date) {
+        this.getOrCreateUserData(date, userName).createdPrs++;
     }
-    addCreatedPr(userName) {
-        this.getOrCreateUserData(userName).createdPrs++;
-        this.setActive(userName);
+    addMergedPr(userName, date) {
+        this.getOrCreateUserData(date, userName).mergedPrs++;
     }
-    addMergedPr(userName) {
-        this.getOrCreateUserData(userName).mergedPrs++;
-        this.setActive(userName);
+    addPrComment(userName, date) {
+        this.getOrCreateUserData(date, userName).prComments++;
     }
-    addPrComment(userName) {
-        this.getOrCreateUserData(userName).prComments++;
-        this.setActive(userName);
+    addCreatedDiscussion(userName, date) {
+        this.getOrCreateUserData(date, userName).createdDiscussions++;
     }
-    addCreatedDiscussion(userName) {
-        this.getOrCreateUserData(userName).createdDiscussions++;
-        this.setActive(userName);
-    }
-    addDiscussionComment(userName) {
-        this.getOrCreateUserData(userName).discussionComments++;
-        this.setActive(userName);
+    addDiscussionComment(userName, date) {
+        this.getOrCreateUserData(date, userName).discussionComments++;
     }
     toJSON() {
-        return JSON.stringify(this.report, null, 2);
-    }
-    toMarkdown() {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
-        let buffer = '';
-        let numColumns = 0;
-        buffer += `# User Activity Report for ${this.organization}\n`;
-        buffer += '\n';
-        buffer += '| User | Org member | Active ';
-        numColumns += 3;
-        if ((_a = this.analyzeOptions) === null || _a === void 0 ? void 0 : _a.commits) {
-            buffer += '| Commits ';
-            numColumns += 1;
-        }
-        if ((_b = this.analyzeOptions) === null || _b === void 0 ? void 0 : _b.issues) {
-            buffer += '| Created Issues ';
-            numColumns += 1;
-        }
-        if ((_c = this.analyzeOptions) === null || _c === void 0 ? void 0 : _c.issueComments) {
-            buffer += '| Issue Comments ';
-            numColumns += 1;
-        }
-        if ((_d = this.analyzeOptions) === null || _d === void 0 ? void 0 : _d.pullRequests) {
-            buffer += '| Created PRs | Merged PRs ';
-            numColumns += 2;
-        }
-        if ((_e = this.analyzeOptions) === null || _e === void 0 ? void 0 : _e.pullRequestComments) {
-            buffer += '| PR Comments ';
-            numColumns += 1;
-        }
-        if ((_f = this.analyzeOptions) === null || _f === void 0 ? void 0 : _f.discussions) {
-            buffer += '| Created Discussions ';
-            numColumns += 1;
-        }
-        if ((_g = this.analyzeOptions) === null || _g === void 0 ? void 0 : _g.discussionComments) {
-            buffer += '| Discussion Comments ';
-            numColumns += 1;
-        }
-        buffer += '|\n';
-        buffer += `${'|---'.repeat(numColumns)}|\n`;
-        for (const [username, data] of Object.entries(this.report).sort(sorter)) {
-            buffer += `| ${username} | ${data.isOrgMember ? '✔️' : '❌'} | ${data.isActive ? '✔️' : '❌'} `;
-            if ((_h = this.analyzeOptions) === null || _h === void 0 ? void 0 : _h.commits) {
-                buffer += `| ${data.commits} `;
-            }
-            if ((_j = this.analyzeOptions) === null || _j === void 0 ? void 0 : _j.issues) {
-                buffer += `| ${data.createdIssues} `;
-            }
-            if ((_k = this.analyzeOptions) === null || _k === void 0 ? void 0 : _k.issueComments) {
-                buffer += `| ${data.issueComments} `;
-            }
-            if ((_l = this.analyzeOptions) === null || _l === void 0 ? void 0 : _l.pullRequests) {
-                buffer += `| ${data.createdPrs} | ${data.mergedPrs} `;
-            }
-            if ((_m = this.analyzeOptions) === null || _m === void 0 ? void 0 : _m.pullRequestComments) {
-                buffer += `| ${data.prComments} `;
-            }
-            if ((_o = this.analyzeOptions) === null || _o === void 0 ? void 0 : _o.discussions) {
-                buffer += `| ${data.createdDiscussions} `;
-            }
-            if ((_p = this.analyzeOptions) === null || _p === void 0 ? void 0 : _p.discussionComments) {
-                buffer += `| ${data.discussionComments} `;
-            }
-            buffer += '|\n';
-        }
-        return buffer;
-    }
-    toCSV() {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
-        let buffer = '';
-        buffer += 'User,Org member,Active';
-        if ((_a = this.analyzeOptions) === null || _a === void 0 ? void 0 : _a.commits) {
-            buffer += ',Commits';
-        }
-        if ((_b = this.analyzeOptions) === null || _b === void 0 ? void 0 : _b.issues) {
-            buffer += ',Created Issues';
-        }
-        if ((_c = this.analyzeOptions) === null || _c === void 0 ? void 0 : _c.issueComments) {
-            buffer += ',Issue Comments';
-        }
-        if ((_d = this.analyzeOptions) === null || _d === void 0 ? void 0 : _d.pullRequests) {
-            buffer += ',Created PRs,Merged PRs';
-        }
-        if ((_e = this.analyzeOptions) === null || _e === void 0 ? void 0 : _e.pullRequestComments) {
-            buffer += ',PR Comments';
-        }
-        if ((_f = this.analyzeOptions) === null || _f === void 0 ? void 0 : _f.discussions) {
-            buffer += ',Created Discussions';
-        }
-        if ((_g = this.analyzeOptions) === null || _g === void 0 ? void 0 : _g.discussionComments) {
-            buffer += ',Discussion Comments';
-        }
-        buffer += '\n';
-        for (const [username, data] of Object.entries(this.report).sort(sorter)) {
-            buffer += `${username},${data.isOrgMember ? '1' : '0'},${data.isActive ? '1' : '0'}`;
-            if ((_h = this.analyzeOptions) === null || _h === void 0 ? void 0 : _h.commits) {
-                buffer += `,${data.commits}`;
-            }
-            if ((_j = this.analyzeOptions) === null || _j === void 0 ? void 0 : _j.issues) {
-                buffer += `,${data.createdIssues}`;
-            }
-            if ((_k = this.analyzeOptions) === null || _k === void 0 ? void 0 : _k.issueComments) {
-                buffer += `,${data.issueComments}`;
-            }
-            if ((_l = this.analyzeOptions) === null || _l === void 0 ? void 0 : _l.pullRequests) {
-                buffer += `,${data.createdPrs},${data.mergedPrs}`;
-            }
-            if ((_m = this.analyzeOptions) === null || _m === void 0 ? void 0 : _m.pullRequestComments) {
-                buffer += `,${data.prComments}`;
-            }
-            if ((_o = this.analyzeOptions) === null || _o === void 0 ? void 0 : _o.discussions) {
-                buffer += `,${data.createdDiscussions}`;
-            }
-            if ((_p = this.analyzeOptions) === null || _p === void 0 ? void 0 : _p.discussionComments) {
-                buffer += `,${data.discussionComments}`;
-            }
-            buffer += '\n';
-        }
-        return buffer;
+        const output = {
+            organization: this.organization,
+            dateRange: {
+                start: Object.keys(this.report)[0],
+                end: Object.keys(this.report)[Object.keys(this.report).length - 1]
+            },
+            orgMembers: Array.from(this.orgMembers),
+            dailyActivity: this.report
+        };
+        return JSON.stringify(output, null, 2);
     }
 }
 
@@ -10458,113 +10321,104 @@ var report_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _a
 
 
 
-function createReport(token, organization, since, until, analyzeOptions) {
+function createDailyReport(token, organization, startDate, endDate, analyzeOptions) {
     return report_awaiter(this, void 0, void 0, function* () {
         const api = new GithubApi(token);
-        const report = new ReportData(organization, analyzeOptions);
+        const dailyReport = new DailyReportData(organization, analyzeOptions);
         const rateLimitStart = yield api.getRateLimitRemaining();
-        const sinceIsoString = since.toISOString();
-        const untilIsoString = until.toISOString();
+        const dateRange = [];
+        const currentDate = new Date(startDate);
+        while (currentDate <= endDate) {
+            dateRange.push(new Date(currentDate));
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
         core.debug('Reading org members');
         const orgMembers = yield api.getOrgMembers(organization);
         for (const member of orgMembers) {
-            report.setOrgMember(member);
+            dailyReport.setOrgMember(member);
         }
         core.debug('Getting org repositories');
         const repos = yield api.getOrgRepos(organization);
-        for (const repo of repos) {
-            core.debug(`Analyzing repository: ${repo.name}...`);
-            if (analyzeOptions.commits) {
-                // commits
-                core.debug('... commits');
-                const branches = (analyzeOptions.commitsOnAllBranches ? yield api.getRepoBranches(repo.id) : [yield api.getRepoDefaultBranch(repo.id)].filter(b => !!b));
-                const uniqueCommits = new Map(); // <oid, commit>
-                for (const branch of branches) {
-                    core.debug(`   ... on ${branch.name}`);
-                    const commits = yield api.getBranchCommits(branch.id, sinceIsoString, untilIsoString);
-                    for (const commit of commits) {
-                        uniqueCommits.set(commit.oid, commit);
+        for (let i = 0; i < dateRange.length - 1; i++) {
+            const dayStart = dateRange[i];
+            const dayEnd = new Date(dateRange[i + 1]);
+            const dayString = dayStart.toISOString().split('T')[0];
+            core.debug(`Processing day: ${dayString}`);
+            for (const repo of repos) {
+                core.debug(`Analyzing repository: ${repo.name} for ${dayString}...`);
+                if (analyzeOptions.commits) {
+                    const branches = (analyzeOptions.commitsOnAllBranches ? yield api.getRepoBranches(repo.id) : [yield api.getRepoDefaultBranch(repo.id)].filter(b => !!b));
+                    const uniqueCommits = new Map();
+                    for (const branch of branches) {
+                        const commits = yield api.getBranchCommits(branch.id, dayStart.toISOString(), dayEnd.toISOString());
+                        for (const commit of commits) {
+                            uniqueCommits.set(commit.oid, commit);
+                        }
+                    }
+                    for (const commit of uniqueCommits.values()) {
+                        if (commit.author) {
+                            dailyReport.addCommit(commit.author, dayString);
+                        }
                     }
                 }
-                for (const commit of uniqueCommits.values()) {
-                    if (commit.author) { // imported commits might not have a Github user reference and are ignored in the report
-                        report.addCommit(commit.author);
-                    }
-                }
-            }
-            if (analyzeOptions.issues) {
-                // issues
-                if (repo.hasIssuesEnabled) {
-                    core.debug('... issues');
-                    const issues = yield api.getRepoIssues(repo.id, sinceIsoString);
+                if (analyzeOptions.issues && repo.hasIssuesEnabled) {
+                    const issues = yield api.getRepoIssues(repo.id, dayStart.toISOString());
                     for (const issue of issues) {
                         const createdAt = new Date(issue.createdAt);
-                        if (issue.author && createdAt >= since && createdAt < until) {
-                            report.addCreatedIssue(issue.author);
+                        if (issue.author && createdAt >= dayStart && createdAt < dayEnd) {
+                            dailyReport.addCreatedIssue(issue.author, dayString);
                         }
                         if (analyzeOptions.issueComments) {
-                            // issue comments
-                            core.debug(`   ... issue comments on #${issue.number}`);
                             const issueComments = yield api.getIssueComments(issue.id);
                             for (const issueComment of issueComments) {
                                 const commentCreatedAt = new Date(issueComment.createdAt);
-                                if (issue.author && commentCreatedAt >= since && commentCreatedAt < until) {
-                                    report.addIssueComment(issue.author);
+                                if (issueComment.author && commentCreatedAt >= dayStart && commentCreatedAt < dayEnd) {
+                                    dailyReport.addIssueComment(issueComment.author, dayString);
                                 }
                             }
                         }
                     }
                 }
-            }
-            if (analyzeOptions.pullRequests) {
-                // prs
-                core.debug('... pull requests');
-                const prs = yield api.getRepoPullRequests(repo.id);
-                for (const pr of prs) {
-                    const createdAt = new Date(pr.createdAt);
-                    if (pr.author && createdAt >= since && createdAt < until) {
-                        report.addCreatedPr(pr.author);
-                    }
-                    if (pr.mergedAt && pr.mergedBy) {
-                        const mergedAt = new Date(pr.mergedAt);
-                        if (mergedAt >= since && mergedAt < until) {
-                            report.addMergedPr(pr.mergedBy);
+                if (analyzeOptions.pullRequests) {
+                    const prs = yield api.getRepoPullRequests(repo.id);
+                    for (const pr of prs) {
+                        const createdAt = new Date(pr.createdAt);
+                        if (pr.author && createdAt >= dayStart && createdAt < dayEnd) {
+                            dailyReport.addCreatedPr(pr.author, dayString);
                         }
-                    }
-                    if (analyzeOptions.pullRequestComments) {
-                        // pr comments
-                        core.debug(`   ... pull request comments on #${pr.number}`);
-                        if (new Date(pr.updatedAt) >= since) {
-                            const comments = yield api.getRepoPullComments(pr.id);
-                            for (const comment of comments) {
-                                const commentCreatedAt = new Date(comment.createdAt);
-                                if (comment.author && commentCreatedAt >= since && commentCreatedAt < until) {
-                                    report.addPrComment(comment.author);
+                        if (pr.mergedAt && pr.mergedBy) {
+                            const mergedAt = new Date(pr.mergedAt);
+                            if (mergedAt >= dayStart && mergedAt < dayEnd) {
+                                dailyReport.addMergedPr(pr.mergedBy, dayString);
+                            }
+                        }
+                        if (analyzeOptions.pullRequestComments) {
+                            if (new Date(pr.updatedAt) >= dayStart) {
+                                const comments = yield api.getRepoPullComments(pr.id);
+                                for (const comment of comments) {
+                                    const commentCreatedAt = new Date(comment.createdAt);
+                                    if (comment.author && commentCreatedAt >= dayStart && commentCreatedAt < dayEnd) {
+                                        dailyReport.addPrComment(comment.author, dayString);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            if (analyzeOptions.discussions) {
-                // discussions
-                if (repo.hasDiscussionsEnabled) {
-                    core.debug('... pull requests');
+                if (analyzeOptions.discussions && repo.hasDiscussionsEnabled) {
                     const discussions = yield api.getRepoDiscussions(repo.id);
                     for (const discussion of discussions) {
                         const createdAt = new Date(discussion.createdAt);
-                        if (discussion.author && createdAt >= since && createdAt < until) {
-                            report.addCreatedDiscussion(discussion.author);
+                        if (discussion.author && createdAt >= dayStart && createdAt < dayEnd) {
+                            dailyReport.addCreatedDiscussion(discussion.author, dayString);
                         }
                         if (analyzeOptions.discussionComments) {
-                            // discussions comments
-                            core.debug(`   ... discussion comments on #${discussion.number}`);
-                            if (new Date(discussion.updatedAt) >= since) {
+                            if (new Date(discussion.updatedAt) >= dayStart) {
                                 const comments = yield api.getDiscussionComments(discussion.id);
                                 for (const comment of comments) {
                                     const commentCreatedAt = new Date(comment.createdAt);
-                                    if (comment.author && commentCreatedAt >= since && commentCreatedAt < until) {
-                                        report.addDiscussionComment(comment.author);
+                                    if (comment.author && commentCreatedAt >= dayStart && commentCreatedAt < dayEnd) {
+                                        dailyReport.addDiscussionComment(comment.author, dayString);
                                     }
                                 }
                             }
@@ -10575,7 +10429,7 @@ function createReport(token, organization, since, until, analyzeOptions) {
         }
         const rateLimitEnd = yield api.getRateLimitRemaining();
         core.info(`GraphQL rate limit cost: ${rateLimitStart - rateLimitEnd}`);
-        return report;
+        return dailyReport;
     });
 }
 
@@ -10595,37 +10449,24 @@ var main_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arg
 function run() {
     return main_awaiter(this, void 0, void 0, function* () {
         try {
-            const options = {
-                commits: core.getBooleanInput('analyze-commits'),
-                commitsOnAllBranches: core.getBooleanInput('analyze-commits-on-all-branches'),
-                issues: core.getBooleanInput('analyze-issues'),
-                issueComments: core.getBooleanInput('analyze-issue-comments'),
-                pullRequests: core.getBooleanInput('analyze-pull-requests'),
-                pullRequestComments: core.getBooleanInput('analyze-pull-request-comments'),
-                discussions: core.getBooleanInput('analyze-discussions'),
-                discussionComments: core.getBooleanInput('analyze-discussion-comments')
+            const token = core.getInput('token', { required: true });
+            const organization = core.getInput('organization', { required: true });
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 31);
+            const analyzeOptions = {
+                commits: true,
+                commitsOnAllBranches: true,
+                issues: true,
+                issueComments: true,
+                pullRequests: true,
+                pullRequestComments: true,
+                discussions: true,
+                discussionComments: true
             };
-            options.issueComments = options.issues && options.issueComments;
-            options.pullRequestComments = options.pullRequests && options.pullRequestComments;
-            options.discussionComments = options.discussions && options.discussionComments;
-            const date = new Date();
-            const since = core.getInput('since')
-                ? new Date(core.getInput('since'))
-                : new Date(date.setDate(date.getDate() - parseInt(core.getInput('since-days'))));
-            const until = core.getInput('until') ? new Date(core.getInput('until')) : new Date();
-            core.debug(`since: ${since}`);
-            core.debug(`until: ${until}`);
-            const report = yield createReport(core.getInput('token'), core.getInput('organization'), since, until, options);
-            if (core.getInput('create-json')) {
-                external_fs_.writeFileSync(core.getInput('create-json'), report.toJSON(), { encoding: 'utf-8' });
-            }
-            if (core.getInput('create-csv')) {
-                external_fs_.writeFileSync(core.getInput('create-csv'), report.toCSV(), { encoding: 'utf-8' });
-            }
-            if (core.getBooleanInput('create-summary')) {
-                core.summary.addRaw(report.toMarkdown());
-                core.summary.write();
-            }
+            const report = yield createDailyReport(token, organization, startDate, endDate, analyzeOptions);
+            external_fs_.writeFileSync('report.json', JSON.stringify(report, null, 2), { encoding: 'utf-8' });
+            console.log('Report has been saved!');
         }
         catch (error) {
             if (error instanceof Error)
