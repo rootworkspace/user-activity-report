@@ -1,4 +1,5 @@
 import * as core from '@actions/core'
+import * as fs from 'fs'
 import { GithubApi } from './github'
 
 async function run(): Promise<void> {
@@ -128,8 +129,11 @@ async function run(): Promise<void> {
     console.log('=== Complete ===')
     console.log(`Generated report for ${totalDays} days across ${repos.length} repositories`)
     console.log(`Total contributions across all days: ${Object.values(dailyTotals).reduce((a, b) => a + b, 0)}`)
-    console.log('\nOutput:')
-    console.log(JSON.stringify(dailyTotals, null, 2))
+
+    // Save to file
+    const outputFile = 'report.json'
+    fs.writeFileSync(outputFile, JSON.stringify(dailyTotals, null, 2), { encoding: 'utf-8' })
+    console.log(`\n✅ Report saved to ${outputFile}`)
 
   } catch (error) {
     if (error instanceof Error) {

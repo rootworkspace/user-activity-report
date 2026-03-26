@@ -9908,6 +9908,8 @@ __nccwpck_require__.r(__webpack_exports__);
 
 // EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(2186);
+// EXTERNAL MODULE: external "fs"
+var external_fs_ = __nccwpck_require__(7147);
 // EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(5438);
 // EXTERNAL MODULE: ./node_modules/@octokit/plugin-paginate-graphql/dist-node/index.js
@@ -10339,6 +10341,7 @@ var main_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arg
 };
 
 
+
 function run() {
     return main_awaiter(this, void 0, void 0, function* () {
         try {
@@ -10447,8 +10450,10 @@ function run() {
             console.log('=== Complete ===');
             console.log(`Generated report for ${totalDays} days across ${repos.length} repositories`);
             console.log(`Total contributions across all days: ${Object.values(dailyTotals).reduce((a, b) => a + b, 0)}`);
-            console.log('\nOutput:');
-            console.log(JSON.stringify(dailyTotals, null, 2));
+            // Save to file
+            const outputFile = 'report.json';
+            external_fs_.writeFileSync(outputFile, JSON.stringify(dailyTotals, null, 2), { encoding: 'utf-8' });
+            console.log(`\n✅ Report saved to ${outputFile}`);
         }
         catch (error) {
             if (error instanceof Error) {
