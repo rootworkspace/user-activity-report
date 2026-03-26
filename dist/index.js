@@ -9926,24 +9926,36 @@ var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _argume
 };
 
 
+
 const IS_GITHUB_COM = process.env['GITHUB_API_URL'] === 'https://api.github.com';
 class GithubApi {
     constructor(token) {
+        this.requestCount = 0;
+        core.debug('Initializing GitHub API client');
         this.octokit = github.getOctokit(token, { baseUrl: process.env['GITHUB_API_URL'] }, dist_node/* paginateGraphql */.A);
+    }
+    logRequest(method, params) {
+        this.requestCount++;
+        core.debug(`[API Request #${this.requestCount}] ${method}`);
     }
     getRateLimitRemaining() {
         var _a;
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getRateLimitRemaining');
             const result = yield this.octokit.graphql(`query {
         rateLimit {
           remaining
         }
       }`);
-            return ((_a = result.rateLimit) === null || _a === void 0 ? void 0 : _a.remaining) || 5000;
+            const remaining = ((_a = result.rateLimit) === null || _a === void 0 ? void 0 : _a.remaining) || 5000;
+            core.debug(`Rate limit remaining: ${remaining}`);
+            return remaining;
         });
     }
     getOrgMembers(organization) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getOrgMembers', { organization });
+            core.info(`Fetching members for organization: ${organization}`);
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $organization: String!) {
         organization(login: $organization) {
           membersWithRole(first: 100, after: $cursor) {
@@ -9959,11 +9971,15 @@ class GithubApi {
       }`, {
                 organization
             });
-            return result.organization.membersWithRole.nodes.map(n => n.login);
+            const members = result.organization.membersWithRole.nodes.map(n => n.login);
+            core.info(`Found ${members.length} members in organization`);
+            return members;
         });
     }
     getOrgRepos(organization) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getOrgRepos', { organization });
+            core.info(`Fetching repositories for organization: ${organization}`);
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $organization: String!) {
         organization(login: $organization) {
           repositories(first: 100, after: $cursor) {
@@ -9984,11 +10000,14 @@ class GithubApi {
       }`, {
                 organization
             });
-            return result.organization.repositories.edges.map(e => (Object.assign(Object.assign({}, e.repository), { hasDiscussionsEnabled: e.repository.hasDiscussionsEnabled || false })));
+            const repos = result.organization.repositories.edges.map(e => (Object.assign(Object.assign({}, e.repository), { hasDiscussionsEnabled: e.repository.hasDiscussionsEnabled || false })));
+            core.info(`Found ${repos.length} repositories in organization`);
+            return repos;
         });
     }
     getRepoBranches(repoId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getRepoBranches', { repoId: repoId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
         node(id: $repoId) {
           ... on Repository {
@@ -10007,11 +10026,14 @@ class GithubApi {
       }`, {
                 repoId
             });
-            return result.node.refs.nodes;
+            const branches = result.node.refs.nodes;
+            core.debug(`Found ${branches.length} branches`);
+            return branches;
         });
     }
     getRepoDefaultBranch(repoId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getRepoDefaultBranch', { repoId: repoId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql(`query paginate($repoId: ID!) {
         node(id: $repoId) {
           ... on Repository {
@@ -10024,11 +10046,14 @@ class GithubApi {
       }`, {
                 repoId
             });
-            return result.node.defaultBranchRef;
+            const branch = result.node.defaultBranchRef;
+            core.debug(`Default branch: ${branch.name}`);
+            return branch;
         });
     }
     getBranchCommits(branchId, since, until) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getBranchCommits', { branchId: branchId.substring(0, 8) + '...', since, until });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $branchId: ID!, $since: GitTimestamp!, $until: GitTimestamp!) {
         node(id: $branchId) {
           ... on Ref {
@@ -10059,21 +10084,21 @@ class GithubApi {
                 since,
                 until
             });
-            return result.node.target.history.nodes.map(n => {
+            const commits = result.node.target.history.nodes.map(n => {
                 var _a;
                 return ({
                     author: (_a = n.author.user) === null || _a === void 0 ? void 0 : _a.login,
                     oid: n.oid
                 });
             });
+            core.debug(`Found ${commits.length} commits in date range`);
+            return commits;
         });
     }
     getRepoIssues(repoId, since) {
         return __awaiter(this, void 0, void 0, function* () {
-            const result = yield this.octokit.graphql.paginate(
-            // filterBy since includes issues that have been created/edited/changed(assigned to)/commented on
-            // interactions that don't update the issue: reactions, probably projects
-            `query paginate($cursor: String, $repoId: ID!, $since: DateTime) {
+            this.logRequest('getRepoIssues', { repoId: repoId.substring(0, 8) + '...', since });
+            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!, $since: DateTime) {
         node(id: $repoId) {
           ... on Repository {
             issues(first: 100, filterBy: {since: $since}, after: $cursor) {
@@ -10096,11 +10121,14 @@ class GithubApi {
                 repoId,
                 since
             });
-            return result.node.issues.nodes.map(n => { var _a; return ({ id: n.id, number: n.number, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            const issues = result.node.issues.nodes.map(n => { var _a; return ({ id: n.id, number: n.number, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            core.debug(`Found ${issues.length} issues since ${since}`);
+            return issues;
         });
     }
     getIssueComments(issueId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getIssueComments', { issueId: issueId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $issueId: ID!) {
         node(id: $issueId) {
           ... on Issue {
@@ -10121,11 +10149,14 @@ class GithubApi {
       }`, {
                 issueId
             });
-            return result.node.comments.nodes.map(n => { var _a; return ({ createdAt: n.createdAt, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login }); });
+            const comments = result.node.comments.nodes.map(n => { var _a; return ({ createdAt: n.createdAt, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login }); });
+            core.debug(`Found ${comments.length} comments`);
+            return comments;
         });
     }
     getRepoPullRequests(repoId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getRepoPullRequests', { repoId: repoId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
         node(id: $repoId) {
           ... on Repository {
@@ -10153,16 +10184,19 @@ class GithubApi {
       }`, {
                 repoId
             });
-            return result.node.pullRequests.nodes.map(n => {
+            const prs = result.node.pullRequests.nodes.map(n => {
                 var _a, _b;
                 return ({
                     id: n.id, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, number: n.number, createdAt: n.createdAt, updatedAt: n.updatedAt, mergedAt: n.mergedAt, mergedBy: (_b = n.mergedBy) === null || _b === void 0 ? void 0 : _b.login
                 });
             });
+            core.debug(`Found ${prs.length} pull requests`);
+            return prs;
         });
     }
     getRepoPullComments(prId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getRepoPullComments', { prId: prId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $prId: ID!) {
         node(id: $prId) {
           ... on PullRequest {
@@ -10183,11 +10217,14 @@ class GithubApi {
       }`, {
                 prId
             });
-            return result.node.comments.nodes.map(n => { var _a; return ({ author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            const comments = result.node.comments.nodes.map(n => { var _a; return ({ author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            core.debug(`Found ${comments.length} PR comments`);
+            return comments;
         });
     }
     getRepoDiscussions(repoId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getRepoDiscussions', { repoId: repoId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
         node(id: $repoId) {
           ... on Repository {
@@ -10211,11 +10248,14 @@ class GithubApi {
       }`, {
                 repoId
             });
-            return result.node.discussions.nodes.map(n => { var _a; return ({ id: n.id, number: n.number, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt, updatedAt: n.updatedAt }); });
+            const discussions = result.node.discussions.nodes.map(n => { var _a; return ({ id: n.id, number: n.number, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt, updatedAt: n.updatedAt }); });
+            core.debug(`Found ${discussions.length} discussions`);
+            return discussions;
         });
     }
     getDiscussionComments(prId) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.logRequest('getDiscussionComments', { discussionId: prId.substring(0, 8) + '...' });
             const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $prId: ID!) {
         node(id: $prId) {
           ... on Discussion {
@@ -10236,7 +10276,9 @@ class GithubApi {
       }`, {
                 prId
             });
-            return result.node.comments.nodes.map(n => { var _a; return ({ author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            const comments = result.node.comments.nodes.map(n => { var _a; return ({ author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            core.debug(`Found ${comments.length} discussion comments`);
+            return comments;
         });
     }
 }
@@ -10320,32 +10362,47 @@ var report_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _a
 };
 
 
-
 function createDailyReport(token, organization, startDate, endDate, analyzeOptions) {
     return report_awaiter(this, void 0, void 0, function* () {
+        console.log('\n=== Processing Activity Data ===');
+        console.log('Initializing GitHub API client...');
         const api = new GithubApi(token);
         const dailyReport = new DailyReportData(organization, analyzeOptions);
+        console.log('Checking rate limit...');
         const rateLimitStart = yield api.getRateLimitRemaining();
+        console.log(`Starting rate limit: ${rateLimitStart}`);
+        console.log('\nBuilding date range...');
         const dateRange = [];
         const currentDate = new Date(startDate);
         while (currentDate <= endDate) {
             dateRange.push(new Date(currentDate));
             currentDate.setDate(currentDate.getDate() + 1);
         }
-        core.debug('Reading org members');
+        console.log(`Processing ${dateRange.length} days (${dateRange[0].toISOString().split('T')[0]} to ${dateRange[dateRange.length - 1].toISOString().split('T')[0]})`);
+        console.log('\nFetching organization members...');
         const orgMembers = yield api.getOrgMembers(organization);
         for (const member of orgMembers) {
             dailyReport.setOrgMember(member);
         }
-        core.debug('Getting org repositories');
+        console.log(`Loaded ${orgMembers.length} organization members`);
+        console.log('\nFetching organization repositories...');
         const repos = yield api.getOrgRepos(organization);
+        console.log(`Found ${repos.length} repositories to analyze`);
+        let totalCommits = 0;
+        let totalIssues = 0;
+        let totalPRs = 0;
+        let totalDiscussions = 0;
         for (let i = 0; i < dateRange.length - 1; i++) {
             const dayStart = dateRange[i];
             const dayEnd = new Date(dateRange[i + 1]);
             const dayString = dayStart.toISOString().split('T')[0];
-            core.debug(`Processing day: ${dayString}`);
+            console.log(`\n📅 Processing day ${i + 1}/${dateRange.length - 1}: ${dayString}`);
+            let dayCommits = 0;
+            let dayIssues = 0;
+            let dayPRs = 0;
+            let dayDiscussions = 0;
             for (const repo of repos) {
-                core.debug(`Analyzing repository: ${repo.name} for ${dayString}...`);
+                process.stdout.write(`  Analyzing repository: ${repo.name}... `);
                 if (analyzeOptions.commits) {
                     const branches = (analyzeOptions.commitsOnAllBranches ? yield api.getRepoBranches(repo.id) : [yield api.getRepoDefaultBranch(repo.id)].filter(b => !!b));
                     const uniqueCommits = new Map();
@@ -10358,6 +10415,7 @@ function createDailyReport(token, organization, startDate, endDate, analyzeOptio
                     for (const commit of uniqueCommits.values()) {
                         if (commit.author) {
                             dailyReport.addCommit(commit.author, dayString);
+                            dayCommits++;
                         }
                     }
                 }
@@ -10367,6 +10425,7 @@ function createDailyReport(token, organization, startDate, endDate, analyzeOptio
                         const createdAt = new Date(issue.createdAt);
                         if (issue.author && createdAt >= dayStart && createdAt < dayEnd) {
                             dailyReport.addCreatedIssue(issue.author, dayString);
+                            dayIssues++;
                         }
                         if (analyzeOptions.issueComments) {
                             const issueComments = yield api.getIssueComments(issue.id);
@@ -10385,6 +10444,7 @@ function createDailyReport(token, organization, startDate, endDate, analyzeOptio
                         const createdAt = new Date(pr.createdAt);
                         if (pr.author && createdAt >= dayStart && createdAt < dayEnd) {
                             dailyReport.addCreatedPr(pr.author, dayString);
+                            dayPRs++;
                         }
                         if (pr.mergedAt && pr.mergedBy) {
                             const mergedAt = new Date(pr.mergedAt);
@@ -10411,6 +10471,7 @@ function createDailyReport(token, organization, startDate, endDate, analyzeOptio
                         const createdAt = new Date(discussion.createdAt);
                         if (discussion.author && createdAt >= dayStart && createdAt < dayEnd) {
                             dailyReport.addCreatedDiscussion(discussion.author, dayString);
+                            dayDiscussions++;
                         }
                         if (analyzeOptions.discussionComments) {
                             if (new Date(discussion.updatedAt) >= dayStart) {
@@ -10425,10 +10486,27 @@ function createDailyReport(token, organization, startDate, endDate, analyzeOptio
                         }
                     }
                 }
+                process.stdout.write(`✓\n`);
             }
+            totalCommits += dayCommits;
+            totalIssues += dayIssues;
+            totalPRs += dayPRs;
+            totalDiscussions += dayDiscussions;
+            console.log(`  Day summary: ${dayCommits} commits, ${dayIssues} issues, ${dayPRs} PRs, ${dayDiscussions} discussions`);
         }
+        console.log('\n=== Processing Complete ===');
+        console.log(`Total activity across all days:`);
+        console.log(`  - Commits: ${totalCommits}`);
+        console.log(`  - Issues created: ${totalIssues}`);
+        console.log(`  - Pull Requests created: ${totalPRs}`);
+        console.log(`  - Discussions created: ${totalDiscussions}`);
         const rateLimitEnd = yield api.getRateLimitRemaining();
-        core.info(`GraphQL rate limit cost: ${rateLimitStart - rateLimitEnd}`);
+        const rateLimitCost = rateLimitStart - rateLimitEnd;
+        console.log(`\nGraphQL API usage:`);
+        console.log(`  - Rate limit start: ${rateLimitStart}`);
+        console.log(`  - Rate limit end: ${rateLimitEnd}`);
+        console.log(`  - Total requests cost: ${rateLimitCost}`);
+        console.log(`  - Average cost per day: ${(rateLimitCost / (dateRange.length - 1)).toFixed(1)}`);
         return dailyReport;
     });
 }
@@ -10449,11 +10527,15 @@ var main_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arg
 function run() {
     return main_awaiter(this, void 0, void 0, function* () {
         try {
+            console.log('=== GitHub Activity Report Generator ===');
+            console.log(`Started at: ${new Date().toISOString()}`);
             const token = core.getInput('token', { required: true });
             const organization = core.getInput('organization', { required: true });
+            console.log(`Generating report for organization: ${organization}`);
             const endDate = new Date();
             const startDate = new Date();
             startDate.setDate(startDate.getDate() - 31);
+            console.log(`Date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]} (last 31 days)`);
             const analyzeOptions = {
                 commits: true,
                 commitsOnAllBranches: true,
@@ -10464,13 +10546,27 @@ function run() {
                 discussions: true,
                 discussionComments: true
             };
+            console.log('Analysis options:');
+            console.log(`  - Commits: ${analyzeOptions.commits} (all branches: ${analyzeOptions.commitsOnAllBranches})`);
+            console.log(`  - Issues: ${analyzeOptions.issues}`);
+            console.log(`  - Issue comments: ${analyzeOptions.issueComments}`);
+            console.log(`  - Pull Requests: ${analyzeOptions.pullRequests}`);
+            console.log(`  - PR comments: ${analyzeOptions.pullRequestComments}`);
+            console.log(`  - Discussions: ${analyzeOptions.discussions}`);
+            console.log(`  - Discussion comments: ${analyzeOptions.discussionComments}`);
+            console.log('\nStarting report generation...');
             const report = yield createDailyReport(token, organization, startDate, endDate, analyzeOptions);
+            console.log('\nSaving report to file...');
             external_fs_.writeFileSync('report.json', JSON.stringify(report, null, 2), { encoding: 'utf-8' });
-            console.log('Report has been saved!');
+            console.log('✅ Report has been saved to report.json');
+            console.log(`Report size: ${(external_fs_.statSync('report.json').size / 1024).toFixed(2)} KB`);
+            console.log(`Completed at: ${new Date().toISOString()}`);
         }
         catch (error) {
-            if (error instanceof Error)
+            if (error instanceof Error) {
+                console.error(`❌ Error: ${error.message}`);
                 core.setFailed(error.message);
+            }
         }
     });
 }
