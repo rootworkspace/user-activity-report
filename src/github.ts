@@ -7,10 +7,11 @@ const IS_GITHUB_COM = process.env['GITHUB_API_URL'] === 'https://api.github.com'
 export class GithubApi {
   octokit: ReturnType<typeof github.getOctokit> & ReturnType<typeof paginateGraphql>
   private requestCount: number = 0
-  private commitCache: Map<string, Map<string, any[]>> = new Map() // repoId -> (date -> commits)
-  private issueCache: Map<string, Map<string, any[]>> = new Map() // repoId -> (date -> issues)
+  private commitCache: Map<string, Map<string, Map<string, { author?: string, oid: string }[]>>> = new Map() // repoId -> (date -> branchName -> commits)
+  private issueCache: Map<string, any[]> = new Map() // repoId -> issues
   private prCache: Map<string, any[]> = new Map() // repoId -> PRs
   private discussionCache: Map<string, any[]> = new Map() // repoId -> discussions
+  private branchCache: Map<string, { id: string, name: string }[]> = new Map() // repoId -> branches
 
   constructor(token: string) {
     core.debug('Initializing GitHub API client')
@@ -78,7 +79,8 @@ export class GithubApi {
     id: string,
     name: string,
     hasDiscussionsEnabled: boolean,
-    hasIssuesEnabled: boolean
+    hasIssuesEnabled: boolean,
+    defaultBranchId?: string
   }[]> {
     this.logRequest('getOrgRepos', { organization })
     core.info(`Fetching repositories for organization: ${organization}`)
@@ -94,9 +96,6 @@ export class GithubApi {
               defaultBranchRef?: {
                 name: string
                 id: string
-                target?: {
-                  history?: any
-                }
               }
             }
           }[]
@@ -141,6 +140,10 @@ export class GithubApi {
   }
 
   async getAllRepoBranches(repoId: string): Promise<{ id: string, name: string }[]> {
+    if (this.branchCache.has(repoId)) {
+      return this.branchCache.get(repoId)!
+    }
+
     this.logRequest('getAllRepoBranches', { repoId: repoId.substring(0, 8) + '...' })
     const result = await this.octokit.graphql.paginate<{
       node: {
@@ -172,40 +175,41 @@ export class GithubApi {
         repoId
       }
     )
-    return result.node.refs.nodes
+    const branches = result.node.refs.nodes
+    this.branchCache.set(repoId, branches)
+    return branches
   }
 
-  // Optimized: Get commits for all branches in a single query per repo per date
   async getCommitsForRepo(repoId: string, startDate: string, endDate: string): Promise<Map<string, { author?: string, oid: string }[]>> {
     const cacheKey = `${startDate}|${endDate}`
-    
+
     if (!this.commitCache.has(repoId)) {
       this.commitCache.set(repoId, new Map())
     }
-    
+
     const repoCache = this.commitCache.get(repoId)!
     if (repoCache.has(cacheKey)) {
       core.debug(`Using cached commits for repo ${repoId.substring(0, 8)}...`)
       return repoCache.get(cacheKey)!
     }
-    
+
     this.logRequest('getCommitsForRepo', { repoId: repoId.substring(0, 8) + '...' })
-    
+
     // Get all branches first
     const branches = await this.getAllRepoBranches(repoId)
-    
+
     // Get commits for all branches in parallel
-    const commitPromises = branches.map(branch => 
+    const commitPromises = branches.map(branch =>
       this.getBranchCommits(branch.id, startDate, endDate)
     )
-    
+
     const commitsPerBranch = await Promise.all(commitPromises)
     const branchCommits = new Map<string, { author?: string, oid: string }[]>()
-    
+
     branches.forEach((branch, index) => {
       branchCommits.set(branch.name, commitsPerBranch[index])
     })
-    
+
     repoCache.set(cacheKey, branchCommits)
     return branchCommits
   }
@@ -266,14 +270,13 @@ export class GithubApi {
     }))
   }
 
-  // Optimized: Get all issues for a repo in one go
   async getAllRepoIssues(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string }[]> {
-    if (this.issueCache.has(repoId) && this.issueCache.get(repoId)!.has('all')) {
-      return this.issueCache.get(repoId)!.get('all')!
+    if (this.issueCache.has(repoId)) {
+      return this.issueCache.get(repoId)!
     }
-    
+
     this.logRequest('getAllRepoIssues', { repoId: repoId.substring(0, 8) + '...' })
-    
+
     const result = await this.octokit.graphql.paginate<{
       node: {
         issues: {
@@ -312,19 +315,15 @@ export class GithubApi {
         repoId
       }
     )
-    
-    const issues = result.node.issues.nodes.map(n => ({ 
-      id: n.id, 
-      number: n.number, 
-      author: n.author?.login, 
-      createdAt: n.createdAt 
+
+    const issues = result.node.issues.nodes.map(n => ({
+      id: n.id,
+      number: n.number,
+      author: n.author?.login,
+      createdAt: n.createdAt
     }))
-    
-    if (!this.issueCache.has(repoId)) {
-      this.issueCache.set(repoId, new Map())
-    }
-    this.issueCache.get(repoId)!.set('all', issues)
-    
+
+    this.issueCache.set(repoId, issues)
     return issues
   }
 
@@ -367,14 +366,13 @@ export class GithubApi {
     return result.node.comments.nodes.map(n => ({ createdAt: n.createdAt, author: n.author?.login }))
   }
 
-  // Optimized: Get all PRs for a repo in one go
   async getAllRepoPullRequests(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string, mergedBy?: string, mergedAt?: string }[]> {
     if (this.prCache.has(repoId)) {
       return this.prCache.get(repoId)!
     }
-    
+
     this.logRequest('getAllRepoPullRequests', { repoId: repoId.substring(0, 8) + '...' })
-    
+
     const result = await this.octokit.graphql.paginate<{
       node: {
         pullRequests: {
@@ -423,17 +421,17 @@ export class GithubApi {
         repoId
       }
     )
-    
+
     const prs = result.node.pullRequests.nodes.map(n => ({
-      id: n.id, 
-      author: n.author?.login, 
-      number: n.number, 
-      createdAt: n.createdAt, 
-      updatedAt: n.updatedAt, 
-      mergedAt: n.mergedAt, 
+      id: n.id,
+      author: n.author?.login,
+      number: n.number,
+      createdAt: n.createdAt,
+      updatedAt: n.updatedAt,
+      mergedAt: n.mergedAt,
       mergedBy: n.mergedBy?.login
     }))
-    
+
     this.prCache.set(repoId, prs)
     return prs
   }
@@ -477,14 +475,13 @@ export class GithubApi {
     return result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
   }
 
-  // Optimized: Get all discussions for a repo in one go
   async getAllRepoDiscussions(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string }[]> {
     if (this.discussionCache.has(repoId)) {
       return this.discussionCache.get(repoId)!
     }
-    
+
     this.logRequest('getAllRepoDiscussions', { repoId: repoId.substring(0, 8) + '...' })
-    
+
     const result = await this.octokit.graphql.paginate<{
       node: {
         discussions: {
@@ -525,15 +522,15 @@ export class GithubApi {
         repoId
       }
     )
-    
-    const discussions = result.node.discussions.nodes.map(n => ({ 
-      id: n.id, 
-      number: n.number, 
-      author: n.author?.login, 
-      createdAt: n.createdAt, 
-      updatedAt: n.updatedAt 
+
+    const discussions = result.node.discussions.nodes.map(n => ({
+      id: n.id,
+      number: n.number,
+      author: n.author?.login,
+      createdAt: n.createdAt,
+      updatedAt: n.updatedAt
     }))
-    
+
     this.discussionCache.set(repoId, discussions)
     return discussions
   }
