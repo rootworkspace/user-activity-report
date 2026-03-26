@@ -1,21 +1,15 @@
 import * as github from '@actions/github'
-import { paginateGraphql } from '@octokit/plugin-paginate-graphql'
 import * as core from '@actions/core'
 
-const IS_GITHUB_COM = process.env['GITHUB_API_URL'] === 'https://api.github.com'
-
 export class GithubApi {
-  octokit: ReturnType<typeof github.getOctokit> & ReturnType<typeof paginateGraphql>
+  octokit: ReturnType<typeof github.getOctokit>
   private requestCount: number = 0
-  private commitCache: Map<string, Map<string, Map<string, { author?: string, oid: string }[]>>> = new Map() // repoId -> (date -> branchName -> commits)
-  private issueCache: Map<string, any[]> = new Map() // repoId -> issues
-  private prCache: Map<string, any[]> = new Map() // repoId -> PRs
-  private discussionCache: Map<string, any[]> = new Map() // repoId -> discussions
-  private branchCache: Map<string, { id: string, name: string }[]> = new Map() // repoId -> branches
+  private token: string
 
   constructor(token: string) {
+    this.token = token
     core.debug('Initializing GitHub API client')
-    this.octokit = github.getOctokit(token, { baseUrl: process.env['GITHUB_API_URL'] }, paginateGraphql) as typeof this.octokit
+    this.octokit = github.getOctokit(token)
   }
 
   private logRequest(method: string, params?: any): void {
@@ -23,554 +17,157 @@ export class GithubApi {
     core.debug(`[API Request #${this.requestCount}] ${method}`)
   }
 
-  async getRateLimitRemaining(): Promise<number> {
-    this.logRequest('getRateLimitRemaining')
-    const result = await this.octokit.graphql<{
-      rateLimit?: {
-        remaining: number
-      }
-    }>(
-      `query {
-        rateLimit {
-          remaining
-        }
-      }`
-    )
-    const remaining = result.rateLimit?.remaining || 5000
-    core.debug(`Rate limit remaining: ${remaining}`)
-    return remaining
-  }
-
   async getOrgMembers(organization: string): Promise<string[]> {
     this.logRequest('getOrgMembers', { organization })
     core.info(`Fetching members for organization: ${organization}`)
-    const result = await this.octokit.graphql.paginate<{
-      organization: {
-        membersWithRole: {
-          nodes: {
-            login: string
-          }[]
+    
+    const members: string[] = []
+    let page = 1
+    
+    try {
+      while (true) {
+        const result = await this.octokit.rest.orgs.listMembers({
+          org: organization,
+          per_page: 100,
+          page
+        })
+        
+        members.push(...result.data.map(m => m.login))
+        
+        if (result.data.length < 100) break
+        page++
+        
+        // Small delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('404')) {
+          throw new Error(`Organization "${organization}" not found or token lacks access`)
+        }
+        if (error.message.includes('401')) {
+          throw new Error('Invalid token or token expired')
         }
       }
-    }>(
-      `query paginate($cursor: String, $organization: String!) {
-        organization(login: $organization) {
-          membersWithRole(first: 100, after: $cursor) {
-            nodes {
-              login
-            }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-          }
-        }
-      }`,
-      {
-        organization
-      }
-    )
-    const members = result.organization.membersWithRole.nodes.map(n => n.login)
+      throw error
+    }
+    
     core.info(`Found ${members.length} members in organization`)
     return members
   }
 
   async getOrgRepos(organization: string): Promise<{
-    id: string,
     name: string,
-    hasDiscussionsEnabled: boolean,
-    hasIssuesEnabled: boolean,
-    defaultBranchId?: string
+    owner: string,
+    default_branch: string,
+    private: boolean
   }[]> {
     this.logRequest('getOrgRepos', { organization })
     core.info(`Fetching repositories for organization: ${organization}`)
-    const result = await this.octokit.graphql.paginate<{
-      organization: {
-        repositories: {
-          edges: {
-            repository: {
-              id: string
-              name: string
-              hasDiscussionsEnabled?: boolean
-              hasIssuesEnabled: boolean
-              defaultBranchRef?: {
-                name: string
-                id: string
-              }
-            }
-          }[]
+    
+    const repos: any[] = []
+    let page = 1
+    
+    try {
+      while (true) {
+        const result = await this.octokit.rest.repos.listForOrg({
+          org: organization,
+          per_page: 100,
+          page,
+          type: 'all'
+        })
+        
+        repos.push(...result.data)
+        
+        if (result.data.length < 100) break
+        page++
+        
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('404')) {
+          throw new Error(`Organization "${organization}" not found or token lacks access`)
         }
       }
-    }>(
-      `query paginate($cursor: String, $organization: String!) {
-        organization(login: $organization) {
-          repositories(first: 100, after: $cursor) {
-            edges {
-              repository:node {
-                id
-                name
-                ${IS_GITHUB_COM ? 'hasDiscussionsEnabled' : ''}
-                hasIssuesEnabled
-                defaultBranchRef {
-                  name
-                  id
-                }
-              }
-            }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-          }
-        }
-      }`,
-      {
-        organization
-      }
-    )
-    const repos = result.organization.repositories.edges.map(e => ({
-      id: e.repository.id,
-      name: e.repository.name,
-      hasDiscussionsEnabled: e.repository.hasDiscussionsEnabled || false,
-      hasIssuesEnabled: e.repository.hasIssuesEnabled,
-      defaultBranchId: e.repository.defaultBranchRef?.id
+      throw error
+    }
+    
+    const repoList = repos.map(repo => ({
+      name: repo.name,
+      owner: repo.owner.login,
+      default_branch: repo.default_branch,
+      private: repo.private
     }))
-    core.info(`Found ${repos.length} repositories in organization`)
-    return repos
+    
+    const privateCount = repoList.filter(r => r.private).length
+    core.info(`Found ${repoList.length} repositories (${privateCount} private, ${repoList.length - privateCount} public)`)
+    return repoList
   }
 
-  async getAllRepoBranches(repoId: string): Promise<{ id: string, name: string }[]> {
-    if (this.branchCache.has(repoId)) {
-      return this.branchCache.get(repoId)!
-    }
-
-    this.logRequest('getAllRepoBranches', { repoId: repoId.substring(0, 8) + '...' })
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        refs: {
-          nodes: {
-            id: string
-            name: string
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            refs(refPrefix: "refs/heads/", first: 100, after: $cursor) {
-              nodes {
-                id
-                name
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        repoId
-      }
-    )
-    const branches = result.node.refs.nodes
-    this.branchCache.set(repoId, branches)
-    return branches
-  }
-
-  async getCommitsForRepo(repoId: string, startDate: string, endDate: string): Promise<Map<string, { author?: string, oid: string }[]>> {
-    const cacheKey = `${startDate}|${endDate}`
-
-    if (!this.commitCache.has(repoId)) {
-      this.commitCache.set(repoId, new Map())
-    }
-
-    const repoCache = this.commitCache.get(repoId)!
-    if (repoCache.has(cacheKey)) {
-      core.debug(`Using cached commits for repo ${repoId.substring(0, 8)}...`)
-      return repoCache.get(cacheKey)!
-    }
-
-    this.logRequest('getCommitsForRepo', { repoId: repoId.substring(0, 8) + '...' })
-
-    // Get all branches first
-    const branches = await this.getAllRepoBranches(repoId)
-
-    // Get commits for all branches in parallel
-    const commitPromises = branches.map(branch =>
-      this.getBranchCommits(branch.id, startDate, endDate)
-    )
-
-    const commitsPerBranch = await Promise.all(commitPromises)
-    const branchCommits = new Map<string, { author?: string, oid: string }[]>()
-
-    branches.forEach((branch, index) => {
-      branchCommits.set(branch.name, commitsPerBranch[index])
-    })
-
-    repoCache.set(cacheKey, branchCommits)
-    return branchCommits
-  }
-
-  async getBranchCommits(branchId: string, since: string, until: string): Promise<{
-    author?: string
-    oid: string
+  async getRepoCommits(
+    owner: string, 
+    repo: string, 
+    since: string, 
+    until: string
+  ): Promise<{ 
+    sha: string, 
+    commit: { 
+      author: { date: string, name: string, email: string } 
+    }, 
+    author?: { login?: string }
   }[]> {
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        target: {
-          history: {
-            nodes: {
-              oid: string
-              author: {
-                user?: {
-                  login: string
-                }
-              }
-            }[]
-          }
+    this.logRequest('getRepoCommits', { owner, repo, since, until })
+    
+    const commits: any[] = []
+    let page = 1
+    
+    try {
+      while (true) {
+        const result = await this.octokit.rest.repos.listCommits({
+          owner,
+          repo,
+          since,
+          until,
+          per_page: 100,
+          page
+        })
+        
+        commits.push(...result.data)
+        
+        if (result.data.length < 100) break
+        page++
+        
+        // Delay to avoid secondary rate limits
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('409')) {
+          core.warning(`Repository ${owner}/${repo} is empty, skipping...`)
+          return []
+        }
+        if (error.message.includes('404')) {
+          core.warning(`Repository ${owner}/${repo} not found or no access, skipping...`)
+          return []
+        }
+        if (error.message.includes('403')) {
+          core.warning(`Access denied to ${owner}/${repo} (check token permissions), skipping...`)
+          return []
         }
       }
-    }>(
-      `query paginate($cursor: String, $branchId: ID!, $since: GitTimestamp!, $until: GitTimestamp!) {
-        node(id: $branchId) {
-          ... on Ref {
-            target {
-              ... on Commit {
-                history(first: 100, since: $since, until: $until, after: $cursor) {
-                  nodes {
-                    oid
-                    author {
-                      user {
-                        login
-                      }
-                    }
-                  }
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
-                }
-              }
-            }
-          }
-        }
-      }`,
-      {
-        branchId,
-        since,
-        until
-      }
-    )
-    return result.node.target.history.nodes.map(n => ({
-      author: n.author.user?.login,
-      oid: n.oid
-    }))
-  }
-
-  async getAllRepoIssues(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string }[]> {
-    if (this.issueCache.has(repoId)) {
-      return this.issueCache.get(repoId)!
+      throw error
     }
-
-    this.logRequest('getAllRepoIssues', { repoId: repoId.substring(0, 8) + '...' })
-
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        issues: {
-          nodes: {
-            id: string
-            number: number,
-            author?: {
-              login: string
-            }
-            createdAt: string
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            issues(first: 100, after: $cursor) {
-              nodes {
-                id
-                number
-                author {
-                  login
-                }
-                createdAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        repoId
-      }
-    )
-
-    const issues = result.node.issues.nodes.map(n => ({
-      id: n.id,
-      number: n.number,
-      author: n.author?.login,
-      createdAt: n.createdAt
-    }))
-
-    this.issueCache.set(repoId, issues)
-    return issues
+    
+    return commits
   }
 
-  async getIssueComments(issueId: string): Promise<{ createdAt: string, author?: string }[]> {
-    this.logRequest('getIssueComments', { issueId: issueId.substring(0, 8) + '...' })
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        comments: {
-          nodes: {
-            createdAt: string
-            author?: {
-              login: string
-            }
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $issueId: ID!) {
-        node(id: $issueId) {
-          ... on Issue {
-            comments(first: 100, after: $cursor) {
-              nodes {
-                createdAt
-                author {
-                  login
-                }
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        issueId
-      }
-    )
-    return result.node.comments.nodes.map(n => ({ createdAt: n.createdAt, author: n.author?.login }))
-  }
-
-  async getAllRepoPullRequests(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string, mergedBy?: string, mergedAt?: string }[]> {
-    if (this.prCache.has(repoId)) {
-      return this.prCache.get(repoId)!
+  async getRateLimit(): Promise<{ remaining: number, limit: number, reset: Date }> {
+    const { data } = await this.octokit.rest.rateLimit.get()
+    return {
+      remaining: data.resources.core.remaining,
+      limit: data.resources.core.limit,
+      reset: new Date(data.rate.reset * 1000)
     }
-
-    this.logRequest('getAllRepoPullRequests', { repoId: repoId.substring(0, 8) + '...' })
-
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        pullRequests: {
-          nodes: {
-            id: string
-            number: number
-            author?: {
-              login: string
-            }
-            createdAt: string
-            updatedAt: string
-            mergedBy?: {
-              login: string
-            }
-            mergedAt?: string
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            pullRequests(first: 100, after: $cursor) {
-              nodes {
-                id
-                number
-                author {
-                  login
-                }
-                createdAt
-                mergedBy {
-                  login
-                }
-                mergedAt
-                updatedAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        repoId
-      }
-    )
-
-    const prs = result.node.pullRequests.nodes.map(n => ({
-      id: n.id,
-      author: n.author?.login,
-      number: n.number,
-      createdAt: n.createdAt,
-      updatedAt: n.updatedAt,
-      mergedAt: n.mergedAt,
-      mergedBy: n.mergedBy?.login
-    }))
-
-    this.prCache.set(repoId, prs)
-    return prs
-  }
-
-  async getRepoPullComments(prId: string): Promise<{ author?: string, createdAt: string }[]> {
-    this.logRequest('getRepoPullComments', { prId: prId.substring(0, 8) + '...' })
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        comments: {
-          nodes: {
-            author?: {
-              login: string
-            }
-            createdAt: string
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $prId: ID!) {
-        node(id: $prId) {
-          ... on PullRequest {
-            comments(first: 100, after: $cursor) {
-              nodes {
-                author {
-                  login
-                }
-                createdAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        prId
-      }
-    )
-    return result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
-  }
-
-  async getAllRepoDiscussions(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string }[]> {
-    if (this.discussionCache.has(repoId)) {
-      return this.discussionCache.get(repoId)!
-    }
-
-    this.logRequest('getAllRepoDiscussions', { repoId: repoId.substring(0, 8) + '...' })
-
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        discussions: {
-          nodes: {
-            id: string
-            number: number
-            author?: {
-              login: string
-            }
-            createdAt: string
-            updatedAt: string
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            discussions(first: 100, after: $cursor) {
-              nodes {
-                id
-                number
-                author {
-                  login
-                }
-                createdAt
-                updatedAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        repoId
-      }
-    )
-
-    const discussions = result.node.discussions.nodes.map(n => ({
-      id: n.id,
-      number: n.number,
-      author: n.author?.login,
-      createdAt: n.createdAt,
-      updatedAt: n.updatedAt
-    }))
-
-    this.discussionCache.set(repoId, discussions)
-    return discussions
-  }
-
-  async getDiscussionComments(discussionId: string): Promise<{ author?: string, createdAt: string }[]> {
-    this.logRequest('getDiscussionComments', { discussionId: discussionId.substring(0, 8) + '...' })
-    const result = await this.octokit.graphql.paginate<{
-      node: {
-        comments: {
-          nodes: {
-            author?: {
-              login: string
-            }
-            createdAt: string
-          }[]
-        }
-      }
-    }>(
-      `query paginate($cursor: String, $discussionId: ID!) {
-        node(id: $discussionId) {
-          ... on Discussion {
-            comments(first: 100, after: $cursor) {
-              nodes {
-                author {
-                  login
-                }
-                createdAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`,
-      {
-        discussionId
-      }
-    )
-    return result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
   }
 }

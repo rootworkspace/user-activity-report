@@ -1,13 +1,21 @@
-name: 'Github Organization Activity Report'
-description: 'Create a daily user activity report for a Github organization'
+# action.yml
+name: 'GitHub Organization Activity Report'
+description: 'Create a daily commit activity report for a GitHub organization'
 author: 'Daniel Benesch'
 inputs:
   token:
-    description: 'GitHub access token for the organization'
+    description: 'GitHub access token for the organization (needs repo and read:org permissions)'
     required: true
   organization:
     description: 'The organization to create the report for'
     required: true
+outputs:
+  total_commits:
+    description: 'Total number of commits from organization members'
+  active_days:
+    description: 'Number of days with at least one commit'
+  report_path:
+    description: 'Path to the generated JSON report file'
 runs:
   using: 'node20'
   main: 'dist/index.js'

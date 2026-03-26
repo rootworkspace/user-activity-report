@@ -3016,213 +3016,6 @@ exports.checkBypass = checkBypass;
 
 /***/ }),
 
-/***/ 5883:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-var __webpack_unused_export__;
-
-
-__webpack_unused_export__ = ({ value: true });
-
-// Todo: Add link to explanation
-const generateMessage = (path, cursorValue) => `The cursor at "${path.join(",")}" did not change its value "${cursorValue}" after a page transition. Please make sure your that your query is set up correctly.`;
-
-class MissingCursorChange extends Error {
-  constructor(pageInfo, cursorValue) {
-    super(generateMessage(pageInfo.pathInQuery, cursorValue));
-    this.pageInfo = pageInfo;
-    this.cursorValue = cursorValue;
-    this.name = "MissingCursorChangeError";
-
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
-  }
-
-}
-
-class MissingPageInfo extends Error {
-  constructor(response) {
-    super(`No pageInfo property found in response. Please make sure to specify the pageInfo in your query. Response-Data: ${JSON.stringify(response, null, 2)}`);
-    this.response = response;
-    this.name = "MissingPageInfo";
-
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
-  }
-
-}
-
-const isObject = value => Object.prototype.toString.call(value) === "[object Object]";
-
-function findPaginatedResourcePath(responseData) {
-  const paginatedResourcePath = deepFindPathToProperty(responseData, "pageInfo");
-
-  if (paginatedResourcePath.length === 0) {
-    throw new MissingPageInfo(responseData);
-  }
-
-  return paginatedResourcePath;
-}
-
-const deepFindPathToProperty = (object, searchProp, path = []) => {
-  for (const key of Object.keys(object)) {
-    const currentPath = [...path, key];
-    const currentValue = object[key];
-
-    if (currentValue.hasOwnProperty(searchProp)) {
-      return currentPath;
-    }
-
-    if (isObject(currentValue)) {
-      const result = deepFindPathToProperty(currentValue, searchProp, currentPath);
-
-      if (result.length > 0) {
-        return result;
-      }
-    }
-  }
-
-  return [];
-};
-/**
- * The interfaces of the "get" and "set" functions are equal to those of lodash:
- * https://lodash.com/docs/4.17.15#get
- * https://lodash.com/docs/4.17.15#set
- *
- * They are cut down to our purposes, but could be replaced by the lodash calls
- * if we ever want to have that dependency.
- */
-
-
-const get = (object, path) => {
-  return path.reduce((current, nextProperty) => current[nextProperty], object);
-};
-
-const set = (object, path, mutator) => {
-  const lastProperty = path[path.length - 1];
-  const parentPath = [...path].slice(0, -1);
-  const parent = get(object, parentPath);
-
-  if (typeof mutator === "function") {
-    parent[lastProperty] = mutator(parent[lastProperty]);
-  } else {
-    parent[lastProperty] = mutator;
-  }
-};
-
-const extractPageInfos = responseData => {
-  const pageInfoPath = findPaginatedResourcePath(responseData);
-  return {
-    pathInQuery: pageInfoPath,
-    pageInfo: get(responseData, [...pageInfoPath, "pageInfo"])
-  };
-};
-
-const isForwardSearch = givenPageInfo => {
-  return givenPageInfo.hasOwnProperty("hasNextPage");
-};
-
-const getCursorFrom = pageInfo => isForwardSearch(pageInfo) ? pageInfo.endCursor : pageInfo.startCursor;
-
-const hasAnotherPage = pageInfo => isForwardSearch(pageInfo) ? pageInfo.hasNextPage : pageInfo.hasPreviousPage;
-
-const createIterator = octokit => {
-  return (query, initialParameters = {}) => {
-    let nextPageExists = true;
-    let parameters = { ...initialParameters
-    };
-    return {
-      [Symbol.asyncIterator]: () => ({
-        async next() {
-          if (!nextPageExists) return {
-            done: true,
-            value: {}
-          };
-          const response = await octokit.graphql(query, parameters);
-          const pageInfoContext = extractPageInfos(response);
-          const nextCursorValue = getCursorFrom(pageInfoContext.pageInfo);
-          nextPageExists = hasAnotherPage(pageInfoContext.pageInfo);
-
-          if (nextPageExists && nextCursorValue === parameters.cursor) {
-            throw new MissingCursorChange(pageInfoContext, nextCursorValue);
-          }
-
-          parameters = { ...parameters,
-            cursor: nextCursorValue
-          };
-          return {
-            done: false,
-            value: response
-          };
-        }
-
-      })
-    };
-  };
-};
-
-const mergeResponses = (response1, response2) => {
-  if (Object.keys(response1).length === 0) {
-    return Object.assign(response1, response2);
-  }
-
-  const path = findPaginatedResourcePath(response1);
-  const nodesPath = [...path, "nodes"];
-  const newNodes = get(response2, nodesPath);
-
-  if (newNodes) {
-    set(response1, nodesPath, values => {
-      return [...values, ...newNodes];
-    });
-  }
-
-  const edgesPath = [...path, "edges"];
-  const newEdges = get(response2, edgesPath);
-
-  if (newEdges) {
-    set(response1, edgesPath, values => {
-      return [...values, ...newEdges];
-    });
-  }
-
-  const pageInfoPath = [...path, "pageInfo"];
-  set(response1, pageInfoPath, get(response2, pageInfoPath));
-  return response1;
-};
-
-const createPaginate = octokit => {
-  const iterator = createIterator(octokit);
-  return async (query, initialParameters = {}) => {
-    let mergedResponse = {};
-
-    for await (const response of iterator(query, initialParameters)) {
-      mergedResponse = mergeResponses(mergedResponse, response);
-    }
-
-    return mergedResponse;
-  };
-};
-
-function paginateGraphql(octokit) {
-  octokit.graphql;
-  return {
-    graphql: Object.assign(octokit.graphql, {
-      paginate: Object.assign(createPaginate(octokit), {
-        iterator: createIterator(octokit)
-      })
-    })
-  };
-}
-
-exports.A = paginateGraphql;
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
 /***/ 4193:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -9912,8 +9705,6 @@ var core = __nccwpck_require__(2186);
 var external_fs_ = __nccwpck_require__(7147);
 // EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(5438);
-// EXTERNAL MODULE: ./node_modules/@octokit/plugin-paginate-graphql/dist-node/index.js
-var dist_node = __nccwpck_require__(5883);
 ;// CONCATENATED MODULE: ./lib/github.js
 var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
@@ -9926,57 +9717,49 @@ var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _argume
 };
 
 
-
-const IS_GITHUB_COM = process.env['GITHUB_API_URL'] === 'https://api.github.com';
 class GithubApi {
     constructor(token) {
         this.requestCount = 0;
-        this.commitCache = new Map(); // repoId -> (date -> branchName -> commits)
-        this.issueCache = new Map(); // repoId -> issues
-        this.prCache = new Map(); // repoId -> PRs
-        this.discussionCache = new Map(); // repoId -> discussions
-        this.branchCache = new Map(); // repoId -> branches
+        this.token = token;
         core.debug('Initializing GitHub API client');
-        this.octokit = github.getOctokit(token, { baseUrl: process.env['GITHUB_API_URL'] }, dist_node/* paginateGraphql */.A);
+        this.octokit = github.getOctokit(token);
     }
     logRequest(method, params) {
         this.requestCount++;
         core.debug(`[API Request #${this.requestCount}] ${method}`);
     }
-    getRateLimitRemaining() {
-        var _a;
-        return __awaiter(this, void 0, void 0, function* () {
-            this.logRequest('getRateLimitRemaining');
-            const result = yield this.octokit.graphql(`query {
-        rateLimit {
-          remaining
-        }
-      }`);
-            const remaining = ((_a = result.rateLimit) === null || _a === void 0 ? void 0 : _a.remaining) || 5000;
-            core.debug(`Rate limit remaining: ${remaining}`);
-            return remaining;
-        });
-    }
     getOrgMembers(organization) {
         return __awaiter(this, void 0, void 0, function* () {
             this.logRequest('getOrgMembers', { organization });
             core.info(`Fetching members for organization: ${organization}`);
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $organization: String!) {
-        organization(login: $organization) {
-          membersWithRole(first: 100, after: $cursor) {
-            nodes {
-              login
+            const members = [];
+            let page = 1;
+            try {
+                while (true) {
+                    const result = yield this.octokit.rest.orgs.listMembers({
+                        org: organization,
+                        per_page: 100,
+                        page
+                    });
+                    members.push(...result.data.map(m => m.login));
+                    if (result.data.length < 100)
+                        break;
+                    page++;
+                    // Small delay to avoid rate limits
+                    yield new Promise(resolve => setTimeout(resolve, 50));
+                }
             }
-            pageInfo {
-              hasNextPage
-              endCursor
+            catch (error) {
+                if (error instanceof Error) {
+                    if (error.message.includes('404')) {
+                        throw new Error(`Organization "${organization}" not found or token lacks access`);
+                    }
+                    if (error.message.includes('401')) {
+                        throw new Error('Invalid token or token expired');
+                    }
+                }
+                throw error;
             }
-          }
-        }
-      }`, {
-                organization
-            });
-            const members = result.organization.membersWithRole.nodes.map(n => n.login);
             core.info(`Found ${members.length} members in organization`);
             return members;
         });
@@ -9985,346 +9768,93 @@ class GithubApi {
         return __awaiter(this, void 0, void 0, function* () {
             this.logRequest('getOrgRepos', { organization });
             core.info(`Fetching repositories for organization: ${organization}`);
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $organization: String!) {
-        organization(login: $organization) {
-          repositories(first: 100, after: $cursor) {
-            edges {
-              repository:node {
-                id
-                name
-                ${IS_GITHUB_COM ? 'hasDiscussionsEnabled' : ''}
-                hasIssuesEnabled
-                defaultBranchRef {
-                  name
-                  id
+            const repos = [];
+            let page = 1;
+            try {
+                while (true) {
+                    const result = yield this.octokit.rest.repos.listForOrg({
+                        org: organization,
+                        per_page: 100,
+                        page,
+                        type: 'all'
+                    });
+                    repos.push(...result.data);
+                    if (result.data.length < 100)
+                        break;
+                    page++;
+                    yield new Promise(resolve => setTimeout(resolve, 50));
                 }
-              }
             }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-          }
-        }
-      }`, {
-                organization
-            });
-            const repos = result.organization.repositories.edges.map(e => {
-                var _a;
-                return ({
-                    id: e.repository.id,
-                    name: e.repository.name,
-                    hasDiscussionsEnabled: e.repository.hasDiscussionsEnabled || false,
-                    hasIssuesEnabled: e.repository.hasIssuesEnabled,
-                    defaultBranchId: (_a = e.repository.defaultBranchRef) === null || _a === void 0 ? void 0 : _a.id
-                });
-            });
-            core.info(`Found ${repos.length} repositories in organization`);
-            return repos;
-        });
-    }
-    getAllRepoBranches(repoId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (this.branchCache.has(repoId)) {
-                return this.branchCache.get(repoId);
-            }
-            this.logRequest('getAllRepoBranches', { repoId: repoId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            refs(refPrefix: "refs/heads/", first: 100, after: $cursor) {
-              nodes {
-                id
-                name
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`, {
-                repoId
-            });
-            const branches = result.node.refs.nodes;
-            this.branchCache.set(repoId, branches);
-            return branches;
-        });
-    }
-    getCommitsForRepo(repoId, startDate, endDate) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const cacheKey = `${startDate}|${endDate}`;
-            if (!this.commitCache.has(repoId)) {
-                this.commitCache.set(repoId, new Map());
-            }
-            const repoCache = this.commitCache.get(repoId);
-            if (repoCache.has(cacheKey)) {
-                core.debug(`Using cached commits for repo ${repoId.substring(0, 8)}...`);
-                return repoCache.get(cacheKey);
-            }
-            this.logRequest('getCommitsForRepo', { repoId: repoId.substring(0, 8) + '...' });
-            // Get all branches first
-            const branches = yield this.getAllRepoBranches(repoId);
-            // Get commits for all branches in parallel
-            const commitPromises = branches.map(branch => this.getBranchCommits(branch.id, startDate, endDate));
-            const commitsPerBranch = yield Promise.all(commitPromises);
-            const branchCommits = new Map();
-            branches.forEach((branch, index) => {
-                branchCommits.set(branch.name, commitsPerBranch[index]);
-            });
-            repoCache.set(cacheKey, branchCommits);
-            return branchCommits;
-        });
-    }
-    getBranchCommits(branchId, since, until) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $branchId: ID!, $since: GitTimestamp!, $until: GitTimestamp!) {
-        node(id: $branchId) {
-          ... on Ref {
-            target {
-              ... on Commit {
-                history(first: 100, since: $since, until: $until, after: $cursor) {
-                  nodes {
-                    oid
-                    author {
-                      user {
-                        login
-                      }
+            catch (error) {
+                if (error instanceof Error) {
+                    if (error.message.includes('404')) {
+                        throw new Error(`Organization "${organization}" not found or token lacks access`);
                     }
-                  }
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
                 }
-              }
+                throw error;
             }
-          }
-        }
-      }`, {
-                branchId,
-                since,
-                until
-            });
-            return result.node.target.history.nodes.map(n => {
-                var _a;
-                return ({
-                    author: (_a = n.author.user) === null || _a === void 0 ? void 0 : _a.login,
-                    oid: n.oid
-                });
-            });
+            const repoList = repos.map(repo => ({
+                name: repo.name,
+                owner: repo.owner.login,
+                default_branch: repo.default_branch,
+                private: repo.private
+            }));
+            const privateCount = repoList.filter(r => r.private).length;
+            core.info(`Found ${repoList.length} repositories (${privateCount} private, ${repoList.length - privateCount} public)`);
+            return repoList;
         });
     }
-    getAllRepoIssues(repoId) {
+    getRepoCommits(owner, repo, since, until) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (this.issueCache.has(repoId)) {
-                return this.issueCache.get(repoId);
-            }
-            this.logRequest('getAllRepoIssues', { repoId: repoId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            issues(first: 100, after: $cursor) {
-              nodes {
-                id
-                number
-                author {
-                  login
+            this.logRequest('getRepoCommits', { owner, repo, since, until });
+            const commits = [];
+            let page = 1;
+            try {
+                while (true) {
+                    const result = yield this.octokit.rest.repos.listCommits({
+                        owner,
+                        repo,
+                        since,
+                        until,
+                        per_page: 100,
+                        page
+                    });
+                    commits.push(...result.data);
+                    if (result.data.length < 100)
+                        break;
+                    page++;
+                    // Delay to avoid secondary rate limits
+                    yield new Promise(resolve => setTimeout(resolve, 100));
                 }
-                createdAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
             }
-          }
-        }
-      }`, {
-                repoId
-            });
-            const issues = result.node.issues.nodes.map(n => {
-                var _a;
-                return ({
-                    id: n.id,
-                    number: n.number,
-                    author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login,
-                    createdAt: n.createdAt
-                });
-            });
-            this.issueCache.set(repoId, issues);
-            return issues;
+            catch (error) {
+                if (error instanceof Error) {
+                    if (error.message.includes('409')) {
+                        core.warning(`Repository ${owner}/${repo} is empty, skipping...`);
+                        return [];
+                    }
+                    if (error.message.includes('404')) {
+                        core.warning(`Repository ${owner}/${repo} not found or no access, skipping...`);
+                        return [];
+                    }
+                    if (error.message.includes('403')) {
+                        core.warning(`Access denied to ${owner}/${repo} (check token permissions), skipping...`);
+                        return [];
+                    }
+                }
+                throw error;
+            }
+            return commits;
         });
     }
-    getIssueComments(issueId) {
+    getRateLimit() {
         return __awaiter(this, void 0, void 0, function* () {
-            this.logRequest('getIssueComments', { issueId: issueId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $issueId: ID!) {
-        node(id: $issueId) {
-          ... on Issue {
-            comments(first: 100, after: $cursor) {
-              nodes {
-                createdAt
-                author {
-                  login
-                }
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`, {
-                issueId
-            });
-            return result.node.comments.nodes.map(n => { var _a; return ({ createdAt: n.createdAt, author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login }); });
-        });
-    }
-    getAllRepoPullRequests(repoId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (this.prCache.has(repoId)) {
-                return this.prCache.get(repoId);
-            }
-            this.logRequest('getAllRepoPullRequests', { repoId: repoId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            pullRequests(first: 100, after: $cursor) {
-              nodes {
-                id
-                number
-                author {
-                  login
-                }
-                createdAt
-                mergedBy {
-                  login
-                }
-                mergedAt
-                updatedAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`, {
-                repoId
-            });
-            const prs = result.node.pullRequests.nodes.map(n => {
-                var _a, _b;
-                return ({
-                    id: n.id,
-                    author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login,
-                    number: n.number,
-                    createdAt: n.createdAt,
-                    updatedAt: n.updatedAt,
-                    mergedAt: n.mergedAt,
-                    mergedBy: (_b = n.mergedBy) === null || _b === void 0 ? void 0 : _b.login
-                });
-            });
-            this.prCache.set(repoId, prs);
-            return prs;
-        });
-    }
-    getRepoPullComments(prId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            this.logRequest('getRepoPullComments', { prId: prId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $prId: ID!) {
-        node(id: $prId) {
-          ... on PullRequest {
-            comments(first: 100, after: $cursor) {
-              nodes {
-                author {
-                  login
-                }
-                createdAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`, {
-                prId
-            });
-            return result.node.comments.nodes.map(n => { var _a; return ({ author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
-        });
-    }
-    getAllRepoDiscussions(repoId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (this.discussionCache.has(repoId)) {
-                return this.discussionCache.get(repoId);
-            }
-            this.logRequest('getAllRepoDiscussions', { repoId: repoId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            discussions(first: 100, after: $cursor) {
-              nodes {
-                id
-                number
-                author {
-                  login
-                }
-                createdAt
-                updatedAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`, {
-                repoId
-            });
-            const discussions = result.node.discussions.nodes.map(n => {
-                var _a;
-                return ({
-                    id: n.id,
-                    number: n.number,
-                    author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login,
-                    createdAt: n.createdAt,
-                    updatedAt: n.updatedAt
-                });
-            });
-            this.discussionCache.set(repoId, discussions);
-            return discussions;
-        });
-    }
-    getDiscussionComments(discussionId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            this.logRequest('getDiscussionComments', { discussionId: discussionId.substring(0, 8) + '...' });
-            const result = yield this.octokit.graphql.paginate(`query paginate($cursor: String, $discussionId: ID!) {
-        node(id: $discussionId) {
-          ... on Discussion {
-            comments(first: 100, after: $cursor) {
-              nodes {
-                author {
-                  login
-                }
-                createdAt
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-            }
-          }
-        }
-      }`, {
-                discussionId
-            });
-            return result.node.comments.nodes.map(n => { var _a; return ({ author: (_a = n.author) === null || _a === void 0 ? void 0 : _a.login, createdAt: n.createdAt }); });
+            const { data } = yield this.octokit.rest.rateLimit.get();
+            return {
+                remaining: data.resources.core.remaining,
+                limit: data.resources.core.limit,
+                reset: new Date(data.rate.reset * 1000)
+            };
         });
     }
 }
@@ -10343,122 +9873,189 @@ var main_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arg
 
 
 function run() {
+    var _a;
     return main_awaiter(this, void 0, void 0, function* () {
         try {
-            console.log('=== GitHub Activity Report Generator ===\n');
+            console.log('=== GitHub Organization Activity Report ===\n');
+            // Get inputs
             const token = core.getInput('token', { required: true });
             const organization = core.getInput('organization', { required: true });
+            // Date range (last 365 days)
             const endDate = new Date();
             const startDate = new Date();
             startDate.setDate(startDate.getDate() - 365);
             console.log(`Organization: ${organization}`);
-            console.log(`Date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]} (last 31 days)\n`);
-            console.log('Initializing GitHub API...');
+            console.log(`Date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}\n`);
+            // Initialize API
             const api = new GithubApi(token);
-            console.log('Fetching organization members...');
+            // Check rate limit
+            const initialRateLimit = yield api.getRateLimit();
+            console.log(`Initial rate limit: ${initialRateLimit.remaining}/${initialRateLimit.limit}`);
+            console.log(`Rate limit resets at: ${initialRateLimit.reset.toLocaleString()}\n`);
+            // Verify token has access to org by fetching members
+            console.log('Verifying token access...');
             const members = yield api.getOrgMembers(organization);
-            const memberSet = new Set(members);
+            const memberSet = new Set(members.map(m => m.toLowerCase()));
             console.log(`✓ Found ${members.length} members\n`);
-            console.log('Fetching organization repositories...');
+            // Get all repos
+            console.log('Fetching repositories...');
             const repos = yield api.getOrgRepos(organization);
             console.log(`✓ Found ${repos.length} repositories to analyze\n`);
-            // Build date range
-            const dateRange = [];
+            // Prepare date strings
+            const since = startDate.toISOString();
+            const until = endDate.toISOString();
+            // Storage
+            const allCommits = [];
+            const dailyTotals = {};
+            const repoCommitCounts = {};
+            const authorCommitCounts = {};
+            let processedRepos = 0;
+            let totalCommits = 0;
+            // Process each repo
+            for (const repo of repos) {
+                processedRepos++;
+                const repoLabel = `${repo.owner}/${repo.name}${repo.private ? ' (private)' : ''}`;
+                console.log(`\n[${processedRepos}/${repos.length}] Processing ${repoLabel}...`);
+                try {
+                    // Get commits for this repo
+                    const commits = yield api.getRepoCommits(repo.owner, repo.name, since, until);
+                    if (commits.length === 0) {
+                        console.log(`  No commits in date range`);
+                        continue;
+                    }
+                    console.log(`  Found ${commits.length} total commits`);
+                    // Filter and process commits from members
+                    let memberCommits = 0;
+                    for (const commit of commits) {
+                        // Try to get author from GitHub user first, fallback to commit author
+                        let authorName = (_a = commit.author) === null || _a === void 0 ? void 0 : _a.login;
+                        let authorEmail = commit.commit.author.email;
+                        if (!authorName) {
+                            authorName = commit.commit.author.name;
+                        }
+                        // Check if author is a member (by username or email)
+                        const isMember = memberSet.has((authorName === null || authorName === void 0 ? void 0 : authorName.toLowerCase()) || '') ||
+                            members.some(m => authorEmail === null || authorEmail === void 0 ? void 0 : authorEmail.toLowerCase().includes(m.toLowerCase()));
+                        if (isMember && authorName) {
+                            const commitDate = new Date(commit.commit.author.date);
+                            const dateStr = commitDate.toISOString().split('T')[0];
+                            memberCommits++;
+                            totalCommits++;
+                            // Store commit record
+                            allCommits.push({
+                                date: dateStr,
+                                author: authorName,
+                                repo: repo.name,
+                                sha: commit.sha.substring(0, 7)
+                            });
+                            // Update daily totals
+                            dailyTotals[dateStr] = (dailyTotals[dateStr] || 0) + 1;
+                            // Update repo counts
+                            repoCommitCounts[repo.name] = (repoCommitCounts[repo.name] || 0) + 1;
+                            // Update author counts
+                            authorCommitCounts[authorName] = (authorCommitCounts[authorName] || 0) + 1;
+                        }
+                    }
+                    console.log(`  ✓ Member commits: ${memberCommits}`);
+                }
+                catch (error) {
+                    console.error(`  ❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                }
+            }
+            // Fill in missing dates
             const currentDate = new Date(startDate);
+            const filledDailyTotals = {};
             while (currentDate <= endDate) {
-                dateRange.push(new Date(currentDate));
+                const dateStr = currentDate.toISOString().split('T')[0];
+                filledDailyTotals[dateStr] = dailyTotals[dateStr] || 0;
                 currentDate.setDate(currentDate.getDate() + 1);
             }
-            const totalDays = dateRange.length - 1;
-            console.log(`Processing ${totalDays} days...\n`);
-            const dailyTotals = {};
-            // Process each day
-            for (let i = 0; i < totalDays; i++) {
-                const dayStart = dateRange[i];
-                const dayEnd = new Date(dateRange[i + 1]);
-                const dayString = dayStart.toISOString().split('T')[0];
-                console.log(`📅 Day ${i + 1}/${totalDays}: ${dayString}`);
-                let total = 0;
-                let repoCount = 0;
-                let activeRepos = 0;
-                for (const repo of repos) {
-                    repoCount++;
-                    process.stdout.write(`  [${repoCount}/${repos.length}] Analyzing... `);
-                    let repoActivity = 0;
-                    // Commits
-                    const branches = yield api.getAllRepoBranches(repo.id);
-                    const uniqueCommits = new Set();
-                    for (const branch of branches) {
-                        const commits = yield api.getBranchCommits(branch.id, dayStart.toISOString(), dayEnd.toISOString());
-                        for (const commit of commits) {
-                            if (commit.author && memberSet.has(commit.author) && !uniqueCommits.has(commit.oid)) {
-                                uniqueCommits.add(commit.oid);
-                                total++;
-                                repoActivity++;
-                            }
-                        }
-                    }
-                    // Issues
-                    if (repo.hasIssuesEnabled) {
-                        const issues = yield api.getAllRepoIssues(repo.id);
-                        for (const issue of issues) {
-                            const createdAt = new Date(issue.createdAt);
-                            if (issue.author && memberSet.has(issue.author) && createdAt >= dayStart && createdAt < dayEnd) {
-                                total++;
-                                repoActivity++;
-                            }
-                            // Issue comments
-                            const comments = yield api.getIssueComments(issue.id);
-                            for (const comment of comments) {
-                                const commentDate = new Date(comment.createdAt);
-                                if (comment.author && memberSet.has(comment.author) && commentDate >= dayStart && commentDate < dayEnd) {
-                                    total++;
-                                    repoActivity++;
-                                }
-                            }
-                        }
-                    }
-                    // PRs
-                    const prs = yield api.getAllRepoPullRequests(repo.id);
-                    for (const pr of prs) {
-                        const createdAt = new Date(pr.createdAt);
-                        if (pr.author && memberSet.has(pr.author) && createdAt >= dayStart && createdAt < dayEnd) {
-                            total++;
-                            repoActivity++;
-                        }
-                        // PR comments
-                        const comments = yield api.getRepoPullComments(pr.id);
-                        for (const comment of comments) {
-                            const commentDate = new Date(comment.createdAt);
-                            if (comment.author && memberSet.has(comment.author) && commentDate >= dayStart && commentDate < dayEnd) {
-                                total++;
-                                repoActivity++;
-                            }
-                        }
-                    }
-                    if (repoActivity > 0) {
-                        process.stdout.write(`✓ (${repoActivity})\n`);
-                        activeRepos++;
-                    }
-                    else {
-                        process.stdout.write(`-\n`);
-                    }
-                }
-                dailyTotals[dayString] = total;
-                console.log(`  📊 ${total} total contributions from ${activeRepos}/${repos.length} active repos\n`);
+            // Display results
+            console.log('\n' + '='.repeat(60));
+            console.log('📊 COMMIT ACTIVITY REPORT');
+            console.log('='.repeat(60));
+            console.log('\n📈 Daily Commit Activity:');
+            const sortedDates = Object.keys(filledDailyTotals).sort();
+            // Show last 30 days
+            const last30Days = sortedDates.slice(-30);
+            console.log('\n  Last 30 days:');
+            for (const date of last30Days) {
+                const count = filledDailyTotals[date];
+                const bar = '█'.repeat(Math.min(Math.floor(count / 5), 50));
+                console.log(`    ${date}: ${count.toString().padStart(3)} commits ${bar}`);
             }
-            console.log('=== Complete ===');
-            console.log(`Generated report for ${totalDays} days across ${repos.length} repositories`);
-            console.log(`Total contributions across all days: ${Object.values(dailyTotals).reduce((a, b) => a + b, 0)}`);
-            // Save to file
-            const outputFile = 'report.json';
-            external_fs_.writeFileSync(outputFile, JSON.stringify(dailyTotals, null, 2), { encoding: 'utf-8' });
-            console.log(`\n✅ Report saved to ${outputFile}`);
+            // Summary statistics
+            const daysWithActivity = Object.values(filledDailyTotals).filter(v => v > 0).length;
+            const totalDays = sortedDates.length;
+            const avgCommitsPerDay = totalCommits / totalDays;
+            console.log('\n📊 Summary:');
+            console.log(`  Total commits: ${totalCommits}`);
+            console.log(`  Days with activity: ${daysWithActivity}/${totalDays}`);
+            console.log(`  Average commits/day: ${avgCommitsPerDay.toFixed(2)}`);
+            if (totalCommits > 0) {
+                const maxDay = Object.entries(filledDailyTotals).sort((a, b) => b[1] - a[1])[0];
+                console.log(`  Most active day: ${maxDay[0]} (${maxDay[1]} commits)`);
+            }
+            // Top repositories
+            const sortedRepos = Object.entries(repoCommitCounts).sort((a, b) => b[1] - a[1]);
+            console.log('\n📚 Top Repositories:');
+            for (const [repo, count] of sortedRepos.slice(0, 10)) {
+                const percentage = ((count / totalCommits) * 100).toFixed(1);
+                console.log(`  ${repo}: ${count} commits (${percentage}%)`);
+            }
+            // Top authors
+            const sortedAuthors = Object.entries(authorCommitCounts).sort((a, b) => b[1] - a[1]);
+            console.log('\n👥 Top Contributors:');
+            for (const [author, count] of sortedAuthors.slice(0, 10)) {
+                const percentage = ((count / totalCommits) * 100).toFixed(1);
+                console.log(`  ${author}: ${count} commits (${percentage}%)`);
+            }
+            // Save JSON report
+            const report = {
+                metadata: {
+                    organization,
+                    token_used: token.substring(0, 10) + '...',
+                    date_range: {
+                        start: startDate.toISOString().split('T')[0],
+                        end: endDate.toISOString().split('T')[0]
+                    },
+                    total_days: totalDays,
+                    members_count: members.length,
+                    repos_analyzed: repos.length,
+                    generated_at: new Date().toISOString()
+                },
+                summary: {
+                    total_commits: totalCommits,
+                    active_days: daysWithActivity,
+                    average_commits_per_day: avgCommitsPerDay,
+                    most_active_day: totalCommits > 0 ? {
+                        date: Object.entries(filledDailyTotals).sort((a, b) => b[1] - a[1])[0][0],
+                        count: Object.entries(filledDailyTotals).sort((a, b) => b[1] - a[1])[0][1]
+                    } : null
+                },
+                daily_activity: filledDailyTotals,
+                repositories: repoCommitCounts,
+                contributors: authorCommitCounts,
+                recent_commits: allCommits.slice(0, 500) // Last 500 commits for reference
+            };
+            external_fs_.writeFileSync('activity-report.json', JSON.stringify(report, null, 2));
+            console.log('\n✅ Detailed report saved to activity-report.json');
+            // Set output for GitHub Actions
+            core.setOutput('total_commits', totalCommits.toString());
+            core.setOutput('active_days', daysWithActivity.toString());
+            core.setOutput('report_path', 'activity-report.json');
+            // Final rate limit check
+            const finalRateLimit = yield api.getRateLimit();
+            const usedRequests = initialRateLimit.limit - finalRateLimit.remaining;
+            console.log(`\n📊 API Usage: ${usedRequests} requests used (${((usedRequests / initialRateLimit.limit) * 100).toFixed(1)}%)`);
         }
         catch (error) {
             if (error instanceof Error) {
                 console.error(`❌ Error: ${error.message}`);
                 core.setFailed(error.message);
+            }
+            else {
+                core.setFailed('Unknown error occurred');
             }
         }
     });
