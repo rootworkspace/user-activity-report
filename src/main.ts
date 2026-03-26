@@ -4,15 +4,8 @@ import { createDailyReport } from './report'
 
 async function run(): Promise<void> {
   try {
-    const token = process.env['GITHUB_TOKEN']
-    if (!token) {
-      throw new Error('GITHUB_TOKEN environment variable is required')
-    }
-
-    const organization = process.env['GITHUB_ORGANIZATION']
-    if (!organization) {
-      throw new Error('GITHUB_ORGANIZATION environment variable is required')
-    }
+    const token = core.getInput('token', { required: true })
+    const organization = core.getInput('organization', { required: true })
 
     const endDate = new Date()
     const startDate = new Date()
