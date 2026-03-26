@@ -11,7 +11,7 @@ async function run(): Promise<void> {
 
     const endDate = new Date()
     const startDate = new Date()
-    startDate.setDate(startDate.getDate() - 31)
+    startDate.setDate(startDate.getDate() - 365)
 
     console.log(`Organization: ${organization}`)
     console.log(`Date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]} (last 31 days)\n`)
