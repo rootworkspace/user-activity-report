@@ -4,9 +4,9 @@ import { createDailyReport } from './report'
 
 async function run(): Promise<void> {
   try {
-    const token = process.env['ORG_STATS_TOKEN']
+    const token = process.env['GITHUB_TOKEN']
     if (!token) {
-      throw new Error('ORG_STATS_TOKEN environment variable is required')
+      throw new Error('GITHUB_TOKEN environment variable is required')
     }
 
     const organization = process.env['GITHUB_ORGANIZATION']
