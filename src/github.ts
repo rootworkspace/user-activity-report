@@ -7,6 +7,10 @@ const IS_GITHUB_COM = process.env['GITHUB_API_URL'] === 'https://api.github.com'
 export class GithubApi {
   octokit: ReturnType<typeof github.getOctokit> & ReturnType<typeof paginateGraphql>
   private requestCount: number = 0
+  private commitCache: Map<string, Map<string, any[]>> = new Map() // repoId -> (date -> commits)
+  private issueCache: Map<string, Map<string, any[]>> = new Map() // repoId -> (date -> issues)
+  private prCache: Map<string, any[]> = new Map() // repoId -> PRs
+  private discussionCache: Map<string, any[]> = new Map() // repoId -> discussions
 
   constructor(token: string) {
     core.debug('Initializing GitHub API client')
@@ -21,7 +25,7 @@ export class GithubApi {
   async getRateLimitRemaining(): Promise<number> {
     this.logRequest('getRateLimitRemaining')
     const result = await this.octokit.graphql<{
-      rateLimit?: { // rate limit might be disabled on GHES
+      rateLimit?: {
         remaining: number
       }
     }>(
@@ -87,6 +91,13 @@ export class GithubApi {
               name: string
               hasDiscussionsEnabled?: boolean
               hasIssuesEnabled: boolean
+              defaultBranchRef?: {
+                name: string
+                id: string
+                target?: {
+                  history?: any
+                }
+              }
             }
           }[]
         }
@@ -101,6 +112,10 @@ export class GithubApi {
                 name
                 ${IS_GITHUB_COM ? 'hasDiscussionsEnabled' : ''}
                 hasIssuesEnabled
+                defaultBranchRef {
+                  name
+                  id
+                }
               }
             }
             pageInfo {
@@ -115,15 +130,18 @@ export class GithubApi {
       }
     )
     const repos = result.organization.repositories.edges.map(e => ({
-      ...e.repository,
-      hasDiscussionsEnabled: e.repository.hasDiscussionsEnabled || false
+      id: e.repository.id,
+      name: e.repository.name,
+      hasDiscussionsEnabled: e.repository.hasDiscussionsEnabled || false,
+      hasIssuesEnabled: e.repository.hasIssuesEnabled,
+      defaultBranchId: e.repository.defaultBranchRef?.id
     }))
     core.info(`Found ${repos.length} repositories in organization`)
     return repos
   }
 
-  async getRepoBranches(repoId: string): Promise<{ id: string, name: string }[]> {
-    this.logRequest('getRepoBranches', { repoId: repoId.substring(0, 8) + '...' })
+  async getAllRepoBranches(repoId: string): Promise<{ id: string, name: string }[]> {
+    this.logRequest('getAllRepoBranches', { repoId: repoId.substring(0, 8) + '...' })
     const result = await this.octokit.graphql.paginate<{
       node: {
         refs: {
@@ -154,51 +172,54 @@ export class GithubApi {
         repoId
       }
     )
-    const branches = result.node.refs.nodes
-    core.debug(`Found ${branches.length} branches`)
-    return branches
+    return result.node.refs.nodes
   }
 
-  async getRepoDefaultBranch(repoId: string): Promise<{ id: string, name: string }> {
-    this.logRequest('getRepoDefaultBranch', { repoId: repoId.substring(0, 8) + '...' })
-    const result = await this.octokit.graphql<{
-      node: {
-        defaultBranchRef: {
-          id: string
-          name: string
-        }
-      }
-    }>(
-      `query paginate($repoId: ID!) {
-        node(id: $repoId) {
-          ... on Repository {
-            defaultBranchRef {
-              id
-              name
-            }
-          }
-        }
-      }`,
-      {
-        repoId
-      }
+  // Optimized: Get commits for all branches in a single query per repo per date
+  async getCommitsForRepo(repoId: string, startDate: string, endDate: string): Promise<Map<string, { author?: string, oid: string }[]>> {
+    const cacheKey = `${startDate}|${endDate}`
+    
+    if (!this.commitCache.has(repoId)) {
+      this.commitCache.set(repoId, new Map())
+    }
+    
+    const repoCache = this.commitCache.get(repoId)!
+    if (repoCache.has(cacheKey)) {
+      core.debug(`Using cached commits for repo ${repoId.substring(0, 8)}...`)
+      return repoCache.get(cacheKey)!
+    }
+    
+    this.logRequest('getCommitsForRepo', { repoId: repoId.substring(0, 8) + '...' })
+    
+    // Get all branches first
+    const branches = await this.getAllRepoBranches(repoId)
+    
+    // Get commits for all branches in parallel
+    const commitPromises = branches.map(branch => 
+      this.getBranchCommits(branch.id, startDate, endDate)
     )
-    const branch = result.node.defaultBranchRef
-    core.debug(`Default branch: ${branch.name}`)
-    return branch
+    
+    const commitsPerBranch = await Promise.all(commitPromises)
+    const branchCommits = new Map<string, { author?: string, oid: string }[]>()
+    
+    branches.forEach((branch, index) => {
+      branchCommits.set(branch.name, commitsPerBranch[index])
+    })
+    
+    repoCache.set(cacheKey, branchCommits)
+    return branchCommits
   }
 
   async getBranchCommits(branchId: string, since: string, until: string): Promise<{
     author?: string
     oid: string
   }[]> {
-    this.logRequest('getBranchCommits', { branchId: branchId.substring(0, 8) + '...', since, until })
     const result = await this.octokit.graphql.paginate<{
       node: {
         target: {
           history: {
             nodes: {
-              oid: string // = git commit hash
+              oid: string
               author: {
                 user?: {
                   login: string
@@ -216,12 +237,10 @@ export class GithubApi {
               ... on Commit {
                 history(first: 100, since: $since, until: $until, after: $cursor) {
                   nodes {
-                    ... on Commit {
-                      oid
-                      author {
-                        user {
-                          login
-                        }
+                    oid
+                    author {
+                      user {
+                        login
                       }
                     }
                   }
@@ -241,16 +260,20 @@ export class GithubApi {
         until
       }
     )
-    const commits = result.node.target.history.nodes.map(n => ({
+    return result.node.target.history.nodes.map(n => ({
       author: n.author.user?.login,
       oid: n.oid
     }))
-    core.debug(`Found ${commits.length} commits in date range`)
-    return commits
   }
 
-  async getRepoIssues(repoId: string, since: string): Promise<{ id: string, number: number, author?: string, createdAt: string }[]> {
-    this.logRequest('getRepoIssues', { repoId: repoId.substring(0, 8) + '...', since })
+  // Optimized: Get all issues for a repo in one go
+  async getAllRepoIssues(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string }[]> {
+    if (this.issueCache.has(repoId) && this.issueCache.get(repoId)!.has('all')) {
+      return this.issueCache.get(repoId)!.get('all')!
+    }
+    
+    this.logRequest('getAllRepoIssues', { repoId: repoId.substring(0, 8) + '...' })
+    
     const result = await this.octokit.graphql.paginate<{
       node: {
         issues: {
@@ -265,10 +288,10 @@ export class GithubApi {
         }
       }
     }>(
-      `query paginate($cursor: String, $repoId: ID!, $since: DateTime) {
+      `query paginate($cursor: String, $repoId: ID!) {
         node(id: $repoId) {
           ... on Repository {
-            issues(first: 100, filterBy: {since: $since}, after: $cursor) {
+            issues(first: 100, after: $cursor) {
               nodes {
                 id
                 number
@@ -286,12 +309,22 @@ export class GithubApi {
         }
       }`,
       {
-        repoId,
-        since
+        repoId
       }
     )
-    const issues = result.node.issues.nodes.map(n => ({ id: n.id, number: n.number, author: n.author?.login, createdAt: n.createdAt }))
-    core.debug(`Found ${issues.length} issues since ${since}`)
+    
+    const issues = result.node.issues.nodes.map(n => ({ 
+      id: n.id, 
+      number: n.number, 
+      author: n.author?.login, 
+      createdAt: n.createdAt 
+    }))
+    
+    if (!this.issueCache.has(repoId)) {
+      this.issueCache.set(repoId, new Map())
+    }
+    this.issueCache.get(repoId)!.set('all', issues)
+    
     return issues
   }
 
@@ -331,13 +364,17 @@ export class GithubApi {
         issueId
       }
     )
-    const comments = result.node.comments.nodes.map(n => ({ createdAt: n.createdAt, author: n.author?.login }))
-    core.debug(`Found ${comments.length} comments`)
-    return comments
+    return result.node.comments.nodes.map(n => ({ createdAt: n.createdAt, author: n.author?.login }))
   }
 
-  async getRepoPullRequests(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string, mergedBy?: string, mergedAt?: string }[]> {
-    this.logRequest('getRepoPullRequests', { repoId: repoId.substring(0, 8) + '...' })
+  // Optimized: Get all PRs for a repo in one go
+  async getAllRepoPullRequests(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string, mergedBy?: string, mergedAt?: string }[]> {
+    if (this.prCache.has(repoId)) {
+      return this.prCache.get(repoId)!
+    }
+    
+    this.logRequest('getAllRepoPullRequests', { repoId: repoId.substring(0, 8) + '...' })
+    
     const result = await this.octokit.graphql.paginate<{
       node: {
         pullRequests: {
@@ -386,10 +423,18 @@ export class GithubApi {
         repoId
       }
     )
+    
     const prs = result.node.pullRequests.nodes.map(n => ({
-      id: n.id, author: n.author?.login, number: n.number, createdAt: n.createdAt, updatedAt: n.updatedAt, mergedAt: n.mergedAt, mergedBy: n.mergedBy?.login
+      id: n.id, 
+      author: n.author?.login, 
+      number: n.number, 
+      createdAt: n.createdAt, 
+      updatedAt: n.updatedAt, 
+      mergedAt: n.mergedAt, 
+      mergedBy: n.mergedBy?.login
     }))
-    core.debug(`Found ${prs.length} pull requests`)
+    
+    this.prCache.set(repoId, prs)
     return prs
   }
 
@@ -429,13 +474,17 @@ export class GithubApi {
         prId
       }
     )
-    const comments = result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
-    core.debug(`Found ${comments.length} PR comments`)
-    return comments
+    return result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
   }
 
-  async getRepoDiscussions(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string }[]> {
-    this.logRequest('getRepoDiscussions', { repoId: repoId.substring(0, 8) + '...' })
+  // Optimized: Get all discussions for a repo in one go
+  async getAllRepoDiscussions(repoId: string): Promise<{ id: string, number: number, author?: string, createdAt: string, updatedAt: string }[]> {
+    if (this.discussionCache.has(repoId)) {
+      return this.discussionCache.get(repoId)!
+    }
+    
+    this.logRequest('getAllRepoDiscussions', { repoId: repoId.substring(0, 8) + '...' })
+    
     const result = await this.octokit.graphql.paginate<{
       node: {
         discussions: {
@@ -476,13 +525,21 @@ export class GithubApi {
         repoId
       }
     )
-    const discussions = result.node.discussions.nodes.map(n => ({ id: n.id, number: n.number, author: n.author?.login, createdAt: n.createdAt, updatedAt: n.updatedAt }))
-    core.debug(`Found ${discussions.length} discussions`)
+    
+    const discussions = result.node.discussions.nodes.map(n => ({ 
+      id: n.id, 
+      number: n.number, 
+      author: n.author?.login, 
+      createdAt: n.createdAt, 
+      updatedAt: n.updatedAt 
+    }))
+    
+    this.discussionCache.set(repoId, discussions)
     return discussions
   }
 
-  async getDiscussionComments(prId: string): Promise<{ author?: string, createdAt: string }[]> {
-    this.logRequest('getDiscussionComments', { discussionId: prId.substring(0, 8) + '...' })
+  async getDiscussionComments(discussionId: string): Promise<{ author?: string, createdAt: string }[]> {
+    this.logRequest('getDiscussionComments', { discussionId: discussionId.substring(0, 8) + '...' })
     const result = await this.octokit.graphql.paginate<{
       node: {
         comments: {
@@ -495,8 +552,8 @@ export class GithubApi {
         }
       }
     }>(
-      `query paginate($cursor: String, $prId: ID!) {
-        node(id: $prId) {
+      `query paginate($cursor: String, $discussionId: ID!) {
+        node(id: $discussionId) {
           ... on Discussion {
             comments(first: 100, after: $cursor) {
               nodes {
@@ -514,11 +571,9 @@ export class GithubApi {
         }
       }`,
       {
-        prId
+        discussionId
       }
     )
-    const comments = result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
-    core.debug(`Found ${comments.length} discussion comments`)
-    return comments
+    return result.node.comments.nodes.map(n => ({ author: n.author?.login, createdAt: n.createdAt }))
   }
 }
