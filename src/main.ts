@@ -1,51 +1,45 @@
 import * as core from '@actions/core'
 import * as fs from 'fs'
-import { createReport } from './report'
-import { AnalyzeOptions } from './reportData'
+import { createDailyReport } from './report'
 
 async function run(): Promise<void> {
   try {
-    const options: AnalyzeOptions = {
-      commits: core.getBooleanInput('analyze-commits'),
-      commitsOnAllBranches: core.getBooleanInput('analyze-commits-on-all-branches'),
-      issues: core.getBooleanInput('analyze-issues'),
-      issueComments: core.getBooleanInput('analyze-issue-comments'),
-      pullRequests: core.getBooleanInput('analyze-pull-requests'),
-      pullRequestComments: core.getBooleanInput('analyze-pull-request-comments'),
-      discussions: core.getBooleanInput('analyze-discussions'),
-      discussionComments: core.getBooleanInput('analyze-discussion-comments')
+    const token = process.env['ORG_STATS_TOKEN']
+    if (!token) {
+      throw new Error('ORG_STATS_TOKEN environment variable is required')
     }
-    options.issueComments = options.issues && options.issueComments
-    options.pullRequestComments = options.pullRequests && options.pullRequestComments
-    options.discussionComments = options.discussions && options.discussionComments
 
-    const date = new Date()
-    const since = core.getInput('since')
-      ? new Date(core.getInput('since'))
-      : new Date(date.setDate(date.getDate() - parseInt(core.getInput('since-days'))))
-    const until = core.getInput('until') ? new Date(core.getInput('until')) : new Date()
+    const organization = process.env['GITHUB_ORGANIZATION']
+    if (!organization) {
+      throw new Error('GITHUB_ORGANIZATION environment variable is required')
+    }
 
-    core.debug(`since: ${since}`)
-    core.debug(`until: ${until}`)
+    const endDate = new Date()
+    const startDate = new Date()
+    startDate.setDate(startDate.getDate() - 31)
 
-    const report = await createReport(
-      core.getInput('token'),
-      core.getInput('organization'),
-      since,
-      until,
-      options
+    const analyzeOptions = {
+      commits: true,
+      commitsOnAllBranches: true,
+      issues: true,
+      issueComments: true,
+      pullRequests: true,
+      pullRequestComments: true,
+      discussions: true,
+      discussionComments: true
+    }
+
+    const report = await createDailyReport(
+      token,
+      organization,
+      startDate,
+      endDate,
+      analyzeOptions
     )
 
-    if (core.getInput('create-json')) {
-      fs.writeFileSync(core.getInput('create-json'), report.toJSON(), { encoding: 'utf-8' })
-    }
-    if (core.getInput('create-csv')) {
-      fs.writeFileSync(core.getInput('create-csv'), report.toCSV(), { encoding: 'utf-8' })
-    }
-    if (core.getBooleanInput('create-summary')) {
-      core.summary.addRaw(report.toMarkdown())
-      core.summary.write()
-    }
+    fs.writeFileSync('report.json', JSON.stringify(report, null, 2), { encoding: 'utf-8' })
+    console.log('Report has been saved!')
+
   } catch (error) {
     if (error instanceof Error) core.setFailed(error.message)
   }
